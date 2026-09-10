@@ -303,8 +303,8 @@ class Coordinator:
         base = kind.split("_")[0]
         if base == "PLANT":
             return ["PLANT", kind.split("_", 1)[1]]
-        if base == "BUILD":
-            return [kind]
+        if base in ("BUILD", "COLLECT"):
+            return [kind]   # BUILD_COOP / BUILD_PASTURE / COLLECT_FERTILIZER are full op names
         if kind == "PLACE":
             return ["PLACE", need]
         return [base]
