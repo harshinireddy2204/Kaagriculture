@@ -40,31 +40,30 @@ def _ring(board=10):
 
 
 class Strategy:
-    """A fixed target: which tiles hold which animal / crop, herd targets, land days."""
-    def __init__(self, cows=3, sheep=1, geese=3, melons=29, straw=3, wheat=12,
-                 land_days=(4, 5, 6)):
+    """A fixed target: which tiles hold which animal / crop, herd targets, land days.
+
+    Mix mirrors the top-3000 replays: a BIG cow+sheep herd (milk + wool + fertilizer) and
+    STRAWBERRY as the dominant crop. Strawberry is ONGOING (plant once, harvest every 2 days
+    all game) so it needs almost no replant labor -- that freed labor is what lets the fleet
+    tend a large herd, which is why melon (constant 12-day replant cycles) scored far worse."""
+    def __init__(self, cows=3, sheep=1, geese=3, melons=15, straw=15, wheat=12,
+                 land_days=(3, 5, 8)):
         self.cows, self.sheep, self.geese = cows, sheep, geese
         self.melons, self.straw, self.wheat = melons, straw, wheat
         self.land_days = land_days
         ring = _ring()
-        # Build a queue of what to place, then assign to ring tiles in order. INTERLEAVE
-        # so the ~21 unlocked NW tiles get a balanced early mix (a few animals to produce +
-        # wheat to feed + melon for income), instead of 15 animals crowding out all crops.
-        pools = {
-            "COW": ["COW"] * cows, "SHEEP": ["SHEEP"] * sheep, "GOOSE": ["GOOSE"] * geese,
-            "WHEAT": ["WHEAT"] * wheat, "MELON": ["MELON"] * melons, "STRAWBERRY": ["STRAWBERRY"] * straw,
-        }
-        # weighted round-robin: for every animal placed, also place ~1 wheat + ~1 melon early
-        order = ["WHEAT", "COW", "MELON", "WHEAT", "SHEEP", "MELON", "COW", "WHEAT",
-                 "GOOSE", "MELON", "COW", "STRAWBERRY"]
-        queue = []
-        while any(pools.values()):
-            progressed = False
-            for k in order:
-                if pools[k]:
-                    queue.append(pools[k].pop()); progressed = True
-            if not progressed:
-                break
+        # Proportional interleave: place every kind at evenly-spaced fractional positions so
+        # animals are spread through the whole worked area (short feed walks everywhere) while
+        # the dominant crop fills the rest, instead of clumping animals in one quadrant.
+        counts = [("COW", cows), ("SHEEP", sheep), ("GOOSE", geese),
+                  ("WHEAT", wheat), ("MELON", melons), ("STRAWBERRY", straw)]
+        total = sum(n for _, n in counts) or 1
+        seq = []
+        for k, n in counts:
+            for i in range(n):
+                seq.append(((i + 0.5) * total / n, k))
+        seq.sort()
+        queue = [k for _, k in seq]
         self.animal_tiles = {}
         self.crop_tiles = {}
         for idx, kind in enumerate(queue):
@@ -360,41 +359,35 @@ class Coordinator:
                     orders.append(["BUY_PRODUCT", "WHEAT", buy]); cash -= buy * wprice
                     wheat += buy
 
-        # 3. crop seeds — buy enough to actually FILL the empty target tiles (they sit empty
-        #    otherwise). WHEAT = free feed; MELON = income engine (top per-tile value).
+        # 3. crop seeds — stock enough to FILL every open target tile of each crop. STRAWBERRY
+        #    is the income engine now (ongoing: plant once, harvest every 2 days) so we keep it
+        #    stocked; WHEAT feeds the herd + early income. A crop is only worth planting if it
+        #    can still pay back before day 30: wheat ~4 days, strawberry needs ~10 to first yield.
         def open_crop(kind):
             return sum(1 for tile, k in self.st.crop_tiles.items()
                        if k == kind and _tile(farm, *tile) is None)
-        # only stock a seed if a crop planted today can still pay back before the day-30 end:
-        # wheat matures in ~4 days, melon needs ~12, strawberry needs time for repeat yields.
-        if day <= 26 and seeds.get("WHEAT", 0) < min(8, open_crop("WHEAT")) and cash >= 150:
-            orders.append(["BUY_SEED", "WHEAT", 8]); cash -= 80
-        # MELON is the income engine — keep it stocked as tiles free up (they must be replanted
-        # after each harvest). Buy up to the number of open melon tiles, capped. Stop once a new
-        # melon can't reach max yield by day 30 (the old day<=14 cutoff killed 2/3 of income).
-        # keep replanting melons whenever a tile is open — a late melon that only part-matures
-        # still beats an empty tile, and stopping early left ~30 tiles idle (crops 37->10).
-        open_melon = open_crop("MELON") if day <= 25 else 0
-        melon_want = min(open_melon, 8)
-        if seeds.get("MELON", 0) < melon_want and cash >= 400:
-            buy = min(melon_want - seeds.get("MELON", 0), int((cash - 200) / 80))
-            if buy > 0:
-                orders.append(["BUY_SEED", "MELON", buy]); cash -= buy * 80
-        if seeds.get("STRAWBERRY", 0) < 1 and 3 <= day <= 16 and cash >= 900:
-            orders.append(["BUY_SEED", "STRAWBERRY", 1]); cash -= 100
+        SEED_PRICE = {"WHEAT": 10, "MELON": 80, "STRAWBERRY": 100, "CARROT": 20, "TOMATO": 50}
+        for ck, batch, dmax, floor in (("WHEAT", 10, 26, 100), ("STRAWBERRY", 12, 20, 500),
+                                       ("MELON", 8, 18, 300)):
+            if day > dmax:
+                continue
+            want = min(open_crop(ck), batch)
+            have = int(seeds.get(ck, 0) or 0)
+            if want > have and cash >= floor:
+                price = SEED_PRICE[ck]
+                buy = min(want - have, int((cash - floor) / price))
+                if buy > 0:
+                    orders.append(["BUY_SEED", ck, buy]); cash -= buy * price
 
-        # 4. hire enough workers to actually WORK the tiles — the tapes run ~10-12.
-        #    Scale with the number of unmet tasks (empty target tiles + animals to tend),
-        #    keeping a cash reserve early. Too few workers = tiles sit empty = no income.
-        #    NOTE: hands are cleared every night, so we must RE-HIRE the whole crew daily,
-        #    even in the endgame — without harvesters there is no income and no liquidation.
+        # 4. hire the crew — the top agents run 13-14. Hands clear nightly so we RE-HIRE the
+        #    whole crew every day, endgame included (no harvesters = no income/liquidation).
         if hour < 4:
             open_targets = 0
             for tile, kind in list(self.st.crop_tiles.items()) + list(self.st.animal_tiles.items()):
                 cell = _tile(farm, *tile)
                 if cell is None or (isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP") and not cell.get("animal")):
                     open_targets += 1
-            want = min(12, max(4, 4 + herd + open_targets // 6))
+            want = min(13, max(4, 4 + herd + open_targets // 6))
             reserve = 700 if day < 8 else 200
             for _ in range(max(0, want - hires)):
                 c = self._fib(hires)
@@ -403,13 +396,11 @@ class Coordinator:
                 else:
                     break
 
-        # 5. GROW the herd only when wheat supply + income can sustain it.
-        #    Phase it: don't over-extend before milk/melon income arrives (~day 8-10).
-        # Count each animal kind ROBUSTLY: placed on the board + sitting in the shed +
-        # CARRIED by a worker (in transit). The old code ignored carried animals, so an
-        # animal in transit was invisible to both counts -> a spurious extra buy -> a 5th
-        # cow with no empty pasture, stuck in the shed forever, which then deadlocked all
-        # further buying. Counting all three states stops the over-buy at the source.
+        # 5. GROW the herd (cow+sheep+goose) toward target. Count each kind ROBUSTLY as
+        #    placed-on-board + in-shed + carried-by-a-worker; a carried animal was once
+        #    invisible to both counts -> spurious over-buy -> a stuck animal that deadlocked
+        #    buying. Phase it so it never outruns wheat/income, but allow a real pipeline so a
+        #    big herd (~15-20, like the top agents) actually gets built, not one-at-a-time.
         placed = {"COW": 0, "SHEEP": 0, "GOOSE": 0}
         for row in farm.get("tiles", []):
             for t in (row or []):
@@ -422,22 +413,25 @@ class Coordinator:
                 carried[a] += int(iv.get(a, 0) or 0)
         total = {a: placed[a] + in_shed[a] + carried[a] for a in placed}
         pending = sum(in_shed[a] + carried[a] for a in placed)   # animals not yet placed
-        phase_cap = 0 if day < 6 else (4 if day < 10 else (9 if day < 16 else target_herd))
-        wheat_ok = wheat >= herd + 2   # enough to safely feed current herd + the new animal
-        reserve = 1000 if day < 14 else 500
-        # allow a small in-flight pipeline (<=1) so buying isn't serialized one placement at a
-        # time, but never buy a kind past its target (placed+shed+carried) — that was the leak.
-        if not endgame and sum(total.values()) < min(target_herd, phase_cap) and pending <= 1 and wheat_ok:
+        phase_cap = 0 if day < 5 else (6 if day < 9 else (12 if day < 14 else target_herd))
+        wheat_ok = wheat >= herd + 3   # enough to feed current herd + the incoming animal(s)
+        reserve = 1200 if day < 12 else 500
+        # up to 2 in flight so build isn't serialized; never buy a kind past its target.
+        if not endgame and sum(total.values()) < min(target_herd, phase_cap) and pending <= 2 and wheat_ok:
             for kind in ("COW", "SHEEP", "GOOSE"):
                 target_kind = {"COW": st.cows, "SHEEP": st.sheep, "GOOSE": st.geese}[kind]
                 if total[kind] < target_kind and cash >= ANIMAL_COST[kind] + reserve:
                     orders.append(["BUY_ANIMAL", kind, 1]); cash -= ANIMAL_COST[kind]; break
 
-        # 6. land only after income flows, with a healthy reserve
+        # 6. land — expand FAST (the top agents unlock quad 2 by ~day 5, quad 3 by ~day 7-11).
+        #    Buy the nq-th quadrant once day >= land_days[nq-1]. Stop at 3 quadrants (75 tiles):
+        #    that already fits the whole target layout, and the 4th (SE) costs 4000 for tiles
+        #    we don't use.
         nq = len(quads)
-        if not endgame and nq < 4 and day >= max(8, (st.land_days[0] if st.land_days else 8)) and 1 <= nq <= 3:
+        ld = st.land_days if st.land_days else (3, 6, 12)
+        if not endgame and 1 <= nq < 3 and day >= ld[nq - 1]:
             cost = (1000, 2000, 4000)[nq - 1]
-            if cash >= cost + 1500:
+            if cash >= cost + 800:
                 orders.append(["BUY_LAND"]); cash -= cost
         return orders
 

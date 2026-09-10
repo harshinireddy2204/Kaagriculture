@@ -53,10 +53,26 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
    collects/game were no-ops and we banked ZERO fertilizer (a sellable good, market
    base 100). Emit the full op name (like BUILD_COOP). Median 48.1k -> 56.9k.
 
+## What the top-3000 replays actually do (analyzed 82 games, winners 130k-183k)
+Extracted every winner's full fingerprint (`scratchpad/replay_fingerprint.py`). The recipe,
+consistent across "feel the agi", "ymg_aq", "SpaTaro":
+- **STRAWBERRY is the dominant crop, not melon** (22-42 straw tiles; melon minor/zero).
+  Strawberry is ONGOING (plant once, harvest every 2 days all game) so PLANT is only ~180-240
+  actions/game — almost no replant labor, which is what frees the fleet to tend a big herd.
+- **Big cow+sheep herd: 15-36 animals** (milk + wool + FERTILIZER byproduct). They sell 7-9
+  DIFFERENT goods each game, so no single good's dynamic price crashes (base prices: melon
+  250, wool 200, milk 160, straw 120, fert 100, egg 50, wheat 25).
+- **Full 3-quadrant board (75 tiles worked)**, land unlocked FAST (quad 2 ~day 5, quad 3
+  ~day 7-11). ~13-14 workers. FERTILIZE used (98-206x) for 2x crop yield. Sell aggressively.
+
+Applying the diversification insight (mixed melon+strawberry, herd 7) lifted us 57k -> 61k.
+But the big-herd/big-farm recipe itself does NOT work in this agent (tested: herd 16 straw =
+~5k coins) — see below.
+
 ## The remaining gap to the champion — and the coordinator's ceiling
-Measured honestly: **coordinator ~57k vs `random`; rescue2800 (the 2418 ladder agent) ~122k
-vs `random`.** Head-to-head, the coordinator loses 0/16 (avg margin ~-129k). So the tape
-router is ~2.2x stronger and the from-scratch agent is not yet competitive.
+Measured honestly: **coordinator ~61k vs `random`** (mixed melon+straw, herd 7);
+**rescue2800 ~122k vs random**, and the top-3000 replay winners hit **130k-183k**. Head-to-head
+the coordinator still loses 0/12 (avg margin ~-116k, improved from -129k).
 
 WHY, precisely (measured, not guessed):
 - Same banked VOLUME (~1200 units/game each) but rescue earns ~2.2x per unit: it runs an
@@ -66,13 +82,18 @@ WHY, precisely (measured, not guessed):
   WRONG way — herd 7 = 56k, 10 = 38k, 12 = 23k, 17 = 0.3k. A big herd starves everything
   because per-turn Hungarian assignment can't feed+care+harvest+collect 17 animals AND tend
   crops; and the fib HIRE cost (paid daily — hands clear nightly) hard-caps the fleet ~13.
-- So within this architecture the optimum is the LIGHT-herd melon focus (herd 7). Pushing
-  past ~57k needs genuine multi-turn route planning (a worker services a committed circuit
-  per shed trip) to make a big herd affordable in labor — the deep open problem. Zone-based
-  routing was tried and hurt (forced workers onto distant empty tiles) — reverted.
+- CONFIRMED with strawberry too: a big farm (herd 16, 34 straw) builds fully (3 quads, 44
+  crops) but nets ~5k — 13 greedy workers can't HARVEST it (only 121 straw banked from 34
+  tiles vs the tapes' ~300), so tiles produce and cap out unharvested, and daily re-hire +
+  price-crashing dumps eat the little income. Same wall regardless of crop.
+- So within this architecture the optimum is the LIGHT-herd (7) diversified mix (~61k).
 
-Bottom line: the coordinator is a clean, bug-free ~57k baseline, but the tape-router
-rescue2800 remains the stronger ladder agent and stays submitted.
+**THE one lever left = multi-turn worker ROUTING.** Every worker action budget is ~75%
+movement; the tapes encode circuits (a worker waters+harvests a local cluster, drops, repeats)
+so almost every action is useful. Per-turn Hungarian re-picks the global-nearest task each
+step -> zigzag -> ~50-tile ceiling. Committed local circuits are the untried fix (zoning was
+a cruder version and hurt). This is the multi-week problem; until it's solved the from-scratch
+agent plateaus ~61k and **rescue2800 stays the submitted ladder agent.**
 
 ## How to iterate (the loop is set up)
 `scratchpad/bench_coord.py` runs the agent vs `random` across seeds and reports coins +
