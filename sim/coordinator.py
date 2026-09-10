@@ -300,45 +300,58 @@ class Coordinator:
         if wheat > 3 * feed_need + 10:
             orders.append(["SELL", "WHEAT", wheat - 3 * feed_need])
 
-        # 2. FEED WHEAT FIRST — animals starve without it. Keep >= 2*feed_need in shed.
-        if wheat < 2 * feed_need and cash >= 300:
-            buy = min(2 * feed_need - wheat, 15)
-            orders.append(["BUY_PRODUCT", "WHEAT", buy]); cash -= buy * wprice
+        # 2. FEED WHEAT IS SURVIVAL — animals die without it. Keep a 3-day buffer,
+        #    and buy it before ANYTHING discretionary, down to a tiny cash floor.
+        if herd > 0:
+            # bigger buffer early (before wheat crops mature ~day 4-6), tapering later
+            days_buffer = 6 if day < 12 else 3
+            target_wheat = days_buffer * feed_need
+            if wheat < target_wheat and cash >= 60:
+                buy = min(target_wheat - wheat, 25, int((cash - 30) / wprice))
+                if buy > 0:
+                    orders.append(["BUY_PRODUCT", "WHEAT", buy]); cash -= buy * wprice
+                    wheat += buy
 
-        # 3. hire modestly, scaled to work, keeping a cash reserve
+        # 3. crop seeds early — the income + free-feed engine (wheat grows feed for cash-free)
+        if seeds.get("WHEAT", 0) < 4 and cash >= 100:
+            orders.append(["BUY_SEED", "WHEAT", 5]); cash -= 50
+        if seeds.get("MELON", 0) < 3 and day <= 12 and cash >= 600:
+            orders.append(["BUY_SEED", "MELON", 3]); cash -= 240
+        if seeds.get("STRAWBERRY", 0) < 1 and 3 <= day <= 16 and cash >= 900:
+            orders.append(["BUY_SEED", "STRAWBERRY", 1]); cash -= 100
+
+        # 4. hire — scaled to work, but keep a big reserve early (survival phase)
         if hour < 3:
-            want = min(9, 4 + herd // 3)
+            reserve = 900 if day < 10 else 300
+            want = min(9, 3 + herd // 3)
             for _ in range(max(0, want - hires)):
                 c = self._fib(hires)
-                if cash >= c + 400:
+                if cash >= c + reserve:
                     orders.append(["HIRE"]); cash -= c; hires += 1
                 else:
                     break
 
-        # 4. crop seeds early (income engine) — cheap, do first
-        if seeds.get("MELON", 0) < 3 and day <= 12 and cash >= 500:
-            orders.append(["BUY_SEED", "MELON", 3]); cash -= 240
-        if seeds.get("WHEAT", 0) < 3 and cash >= 60:
-            orders.append(["BUY_SEED", "WHEAT", 4]); cash -= 40
-        if seeds.get("STRAWBERRY", 0) < 1 and 3 <= day <= 16 and cash >= 700:
-            orders.append(["BUY_SEED", "STRAWBERRY", 1]); cash -= 100
-
-        # 5. buy ONE animal at a time, only with a healthy reserve (avoid the day-2 crash)
+        # 5. GROW the herd only when wheat supply + income can sustain it.
+        #    Phase it: don't over-extend before milk/melon income arrives (~day 8-10).
         target_herd = st.cows + st.sheep + st.geese
         pending = sum(int(shed.get(a, 0) or 0) for a in ANIMAL_COST)
-        if herd + pending < target_herd and pending == 0:
+        # skip the doomed pre-income herd: build only once melons/wheat sustain it
+        phase_cap = 0 if day < 6 else (4 if day < 10 else (9 if day < 16 else target_herd))
+        wheat_ok = wheat >= 3 * max(1, herd + 1)   # a comfortable buffer incl the next animal
+        reserve = 1000 if day < 14 else 500
+        if herd + pending < min(target_herd, phase_cap) and pending == 0 and wheat_ok:
             for kind in ("COW", "SHEEP", "GOOSE"):
                 have_kind = sum(1 for row in farm.get("tiles", []) for t in (row or [])
                                 if isinstance(t, dict) and t.get("animal") == kind)
                 target_kind = {"COW": st.cows, "SHEEP": st.sheep, "GOOSE": st.geese}[kind]
-                if have_kind < target_kind and cash >= ANIMAL_COST[kind] + 800:
+                if have_kind < target_kind and cash >= ANIMAL_COST[kind] + reserve:
                     orders.append(["BUY_ANIMAL", kind, 1]); cash -= ANIMAL_COST[kind]; break
 
-        # 6. land per schedule, only with reserve
+        # 6. land only after income flows, with a healthy reserve
         nq = len(quads)
-        if nq < 4 and day >= (st.land_days[0] if st.land_days else 4) and 1 <= nq <= 3:
+        if nq < 4 and day >= max(8, (st.land_days[0] if st.land_days else 8)) and 1 <= nq <= 3:
             cost = (1000, 2000, 4000)[nq - 1]
-            if cash >= cost + 1000:
+            if cash >= cost + 1500:
                 orders.append(["BUY_LAND"]); cash -= cost
         return orders
 

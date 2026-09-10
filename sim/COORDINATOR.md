@@ -16,19 +16,22 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
   reserve, crop seeds early, modest hiring.
 
 ## Where it stands (measured on the exact engine vs `random`)
-- herd peaks ~4–8, but **animals starve mid-game** (fed early, die by ~day 15).
-- coins ~200–800 per game — vs the animal-meta tapes' ~100k. **Far from competitive.**
-- It functions end-to-end (builds structures, places animals, runs a positive-ish
-  economy) — a real skeleton, not a competitive agent.
+- **Feeding reliability: SOLVED.** Herd trajectory is monotonic (0 deaths) — once an
+  animal is placed it never starves. Root cause was economic, not coordination: the
+  shed ran out of wheat and the agent was too broke to buy more. Fixed by making
+  feed-wheat the top spending priority (6-day buffer early, down to a tiny cash
+  floor), skipping the doomed pre-income herd (no animals until ~day 6), and phasing
+  the herd build so it never outruns the wheat supply.
+- Herd now builds to ~13 and holds; coins ~6,600 (consistent) — vs the animal-meta
+  tapes' ~100k. Functional and stable, but still far from competitive.
 
 ## The bottlenecks to crack next (in order)
-1. **Feeding reliability** — the killer. As the herd grows, committed feeders can't
-   cover every animal every day within labor + movement limits, so animals hit
-   `consecutive_unfed >= 2` and escape. Needs: enough wheat in shed at all times +
-   enough feeder-throughput scaled to herd, and feeders that route efficiently
-   (feed multiple per wheat-stack trip). This is the labor/movement constraint the
-   `planner.py` idealized away — now it's the binding wall.
-2. **Labor throughput / movement** — tending N animals + M crops requires ~N+M daily
+1. ~~Feeding reliability~~ — SOLVED (see above).
+2. **Herd-build timing / throughput** — the herd doesn't start until ~day 16 and only
+   reaches 13, so it produces little milk. Pastures build late (workers busy planting
+   crops) and animals are bought/placed slowly. Need earlier structure-building and a
+   faster, wheat-secured ramp so the herd is large and producing by mid-game.
+3. **Labor throughput / movement** — tending N animals + M crops requires ~N+M daily
    visits; with ~9 workers and Manhattan movement, the schedule saturates. The
    Hungarian minimizes per-turn distance but there's no multi-turn route planning.
 3. **Economy pacing** — balance building the herd vs funding it from crop/animal
