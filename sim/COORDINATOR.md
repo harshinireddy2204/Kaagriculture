@@ -22,15 +22,19 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
   feed-wheat the top spending priority (6-day buffer early, down to a tiny cash
   floor), skipping the doomed pre-income herd (no animals until ~day 6), and phasing
   the herd build so it never outruns the wheat supply.
-- Herd now builds to ~13 and holds; coins ~6,600 (consistent) — vs the animal-meta
-  tapes' ~100k. Functional and stable, but still far from competitive.
+- Herd/crop production now works: coins ~20,000 (median), a 3x jump from the first
+  stable ~6,600. Strategy sweep found the optimum is 4cow/2sheep/6goose/22melon/
+  4straw/14wheat — MELON + glut-proof EGGS, less strawberry/animals, exactly the
+  planner's finding. Still below the animal-meta tapes' ~100k (this is vs `random`).
 
 ## The bottlenecks to crack next (in order)
 1. ~~Feeding reliability~~ — SOLVED (see above).
-2. **Herd-build timing / throughput** — the herd doesn't start until ~day 16 and only
-   reaches 13, so it produces little milk. Pastures build late (workers busy planting
-   crops) and animals are bought/placed slowly. Need earlier structure-building and a
-   faster, wheat-secured ramp so the herd is large and producing by mid-game.
+2. ~~Herd-build timing~~ — FIXED. Root causes were (a) wheat crops assigned to LOCKED
+   outer quadrants so no early feed (deadlock), fixed by an INTERLEAVED layout that puts
+   a balanced wheat/animal/melon mix on the unlocked NW tiles; (b) the animal-heavy mix
+   itself — a melon+egg mix earns far more per tile. Coins 6.6k -> 20k.
+3. **Scale / opponent strength** — 20k is vs `random`; needs testing vs real agents and
+   scaling production (more tiles worked, land expansion) toward the ~100k tapes.
 3. **Labor throughput / movement** — tending N animals + M crops requires ~N+M daily
    visits; with ~9 workers and Manhattan movement, the schedule saturates. The
    Hungarian minimizes per-turn distance but there's no multi-turn route planning.

@@ -41,7 +41,7 @@ def _ring(board=10):
 
 class Strategy:
     """A fixed target: which tiles hold which animal / crop, herd targets, land days."""
-    def __init__(self, cows=8, sheep=4, geese=3, melons=14, straw=10, wheat=16,
+    def __init__(self, cows=4, sheep=2, geese=6, melons=22, straw=4, wheat=14,
                  land_days=(4, 5, 6)):
         self.cows, self.sheep, self.geese = cows, sheep, geese
         self.melons, self.straw, self.wheat = melons, straw, wheat
