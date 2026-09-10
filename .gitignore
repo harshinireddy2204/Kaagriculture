@@ -1,0 +1,23 @@
+# Bulky raw/derived data — not source
+router_replays/
+opponents/
+notebooks/
+extracted_*/
+nb_mostpower/
+nb_reactivev2/
+nb_econpolicy/
+seven_rescue/
+greedy_rl/
+_verify*/
+submission_v1/
+submission_v9/
+__pycache__/
+*.pyc
+*.tar.gz
+last_run.json
+ab_*.json
+replay_*.json
+_*.json
+# throwaway scratch
+test_*.py
+greedy_rl_full.py
