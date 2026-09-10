@@ -48,14 +48,31 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
    can't mature) and liquidate — BUT keep re-hiring the crew daily (hands are cleared every
    night), or there's nobody to harvest the final days.
 
-## The remaining gap to the tapes (~100k)
-Still ~44k vs `random` — roughly half the animal-meta tapes. Coverage tops out around
-NW+NE (~35 tiles); SW/SE are unlocked (~day 21) but barely worked. Candidate next levers:
-faster early build-out (reach full farm before ~day 15, not ~day 18), higher worker cap /
-better labor throughput to actually work SW/SE, CARE bonus exploitation, and market
-sell-price management (dynamic prices crash under volume). Zone-based routing was tried and
-*hurt* (workers forced to distant empty tiles) — reverted; labor is not yet the binding
-constraint, build-out speed and mix are.
+7. **COLLECT_FERTILIZER emitted as ["COLLECT"] (~48k -> ~57k).** `_do()` returned
+   `kind.split("_")[0]` = "COLLECT", not the real op "COLLECT_FERTILIZER" — so ~650
+   collects/game were no-ops and we banked ZERO fertilizer (a sellable good, market
+   base 100). Emit the full op name (like BUILD_COOP). Median 48.1k -> 56.9k.
+
+## The remaining gap to the champion — and the coordinator's ceiling
+Measured honestly: **coordinator ~57k vs `random`; rescue2800 (the 2418 ladder agent) ~122k
+vs `random`.** Head-to-head, the coordinator loses 0/16 (avg margin ~-129k). So the tape
+router is ~2.2x stronger and the from-scratch agent is not yet competitive.
+
+WHY, precisely (measured, not guessed):
+- Same banked VOLUME (~1200 units/game each) but rescue earns ~2.2x per unit: it runs an
+  ANIMAL-HEAVY farm (17 animals) whose milk/wool/eggs + FERTILIZER byproduct are far more
+  valuable than our melon/wheat mix, and its tapes tend that herd on pre-optimized routes.
+- Our agent CANNOT copy that: a herd-size sweep (with fertilizer fixed) is monotonic the
+  WRONG way — herd 7 = 56k, 10 = 38k, 12 = 23k, 17 = 0.3k. A big herd starves everything
+  because per-turn Hungarian assignment can't feed+care+harvest+collect 17 animals AND tend
+  crops; and the fib HIRE cost (paid daily — hands clear nightly) hard-caps the fleet ~13.
+- So within this architecture the optimum is the LIGHT-herd melon focus (herd 7). Pushing
+  past ~57k needs genuine multi-turn route planning (a worker services a committed circuit
+  per shed trip) to make a big herd affordable in labor — the deep open problem. Zone-based
+  routing was tried and hurt (forced workers onto distant empty tiles) — reverted.
+
+Bottom line: the coordinator is a clean, bug-free ~57k baseline, but the tape-router
+rescue2800 remains the stronger ladder agent and stays submitted.
 
 ## How to iterate (the loop is set up)
 `scratchpad/bench_coord.py` runs the agent vs `random` across seeds and reports coins +
