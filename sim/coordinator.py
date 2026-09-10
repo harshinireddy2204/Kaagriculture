@@ -47,15 +47,33 @@ class Strategy:
         self.melons, self.straw, self.wheat = melons, straw, wheat
         self.land_days = land_days
         ring = _ring()
-        i = 0
-        self.animal_tiles = {}   # tile -> animal kind
-        for kind, n in (("COW", cows), ("SHEEP", sheep), ("GOOSE", geese)):
-            for _ in range(n):
-                self.animal_tiles[ring[i]] = kind; i += 1
-        self.crop_tiles = {}     # tile -> crop kind
-        for kind, n in (("MELON", melons), ("STRAWBERRY", straw), ("WHEAT", wheat)):
-            for _ in range(n):
-                self.crop_tiles[ring[i]] = kind; i += 1
+        # Build a queue of what to place, then assign to ring tiles in order. INTERLEAVE
+        # so the ~21 unlocked NW tiles get a balanced early mix (a few animals to produce +
+        # wheat to feed + melon for income), instead of 15 animals crowding out all crops.
+        pools = {
+            "COW": ["COW"] * cows, "SHEEP": ["SHEEP"] * sheep, "GOOSE": ["GOOSE"] * geese,
+            "WHEAT": ["WHEAT"] * wheat, "MELON": ["MELON"] * melons, "STRAWBERRY": ["STRAWBERRY"] * straw,
+        }
+        # weighted round-robin: for every animal placed, also place ~1 wheat + ~1 melon early
+        order = ["WHEAT", "COW", "MELON", "WHEAT", "SHEEP", "MELON", "COW", "WHEAT",
+                 "GOOSE", "MELON", "COW", "STRAWBERRY"]
+        queue = []
+        while any(pools.values()):
+            progressed = False
+            for k in order:
+                if pools[k]:
+                    queue.append(pools[k].pop()); progressed = True
+            if not progressed:
+                break
+        self.animal_tiles = {}
+        self.crop_tiles = {}
+        for idx, kind in enumerate(queue):
+            if idx >= len(ring):
+                break
+            if kind in ("COW", "SHEEP", "GOOSE"):
+                self.animal_tiles[ring[idx]] = kind
+            else:
+                self.crop_tiles[ring[idx]] = kind
 
 
 def _dist(a, b):
@@ -313,8 +331,8 @@ class Coordinator:
                     wheat += buy
 
         # 3. crop seeds early — the income + free-feed engine (wheat grows feed for cash-free)
-        if seeds.get("WHEAT", 0) < 4 and cash >= 100:
-            orders.append(["BUY_SEED", "WHEAT", 5]); cash -= 50
+        if seeds.get("WHEAT", 0) < 10 and cash >= 150:
+            orders.append(["BUY_SEED", "WHEAT", 10]); cash -= 100
         if seeds.get("MELON", 0) < 3 and day <= 12 and cash >= 600:
             orders.append(["BUY_SEED", "MELON", 3]); cash -= 240
         if seeds.get("STRAWBERRY", 0) < 1 and 3 <= day <= 16 and cash >= 900:
