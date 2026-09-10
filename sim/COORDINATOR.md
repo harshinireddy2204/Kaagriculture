@@ -16,42 +16,47 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
   reserve, crop seeds early, modest hiring.
 
 ## Where it stands (measured on the exact engine vs `random`)
-- **Feeding reliability: SOLVED.** Herd trajectory is monotonic (0 deaths) — once an
-  animal is placed it never starves. Root cause was economic, not coordination: the
-  shed ran out of wheat and the agent was too broke to buy more. Fixed by making
-  feed-wheat the top spending priority (6-day buffer early, down to a tiny cash
-  floor), skipping the doomed pre-income herd (no animals until ~day 6), and phasing
-  the herd build so it never outruns the wheat supply.
-- Herd/crop production now works: coins ~20,000 (median), a 3x jump from the first
-  stable ~6,600. Strategy sweep found the optimum is 4cow/2sheep/6goose/22melon/
-  4straw/14wheat — MELON + glut-proof EGGS, less strawberry/animals, exactly the
-  planner's finding. Still below the animal-meta tapes' ~100k (this is vs `random`).
+- **~26k -> ~48k median (10 seeds: median 48.1k, min 44.7k, max 51.3k).** The jump came
+  from fixing how the engine actually PAYS OUT, not from the coordination layer.
+- Coverage: NW+NE worked in full (~40 tiles), SW barely (2-3), SE=0. The layout only
+  TARGETS ~51 tiles (NW+NE+part of SW); extending it into SW/SE is the next scale lever.
+- **Feeding reliability: SOLVED.** Once placed, an animal never starves. Feed-wheat is a
+  top spending priority; the herd build is phased so it never outruns wheat supply.
+- **Best strategy = LIGHT herd + melon focus: 2cow/1sheep/3goose/32melon/2straw/12wheat.**
+  A heavy herd (4/2/6) actually scores *worse* (~26k) — 12 animals need ~48 tend-tasks/day
+  and steal labor from melons (crops 37->26). Pure crops with zero animals is also worse
+  (~28k): a few animals help, but melons dominate per tile. Exactly the planner's finding.
 
-## The bottlenecks to crack next (in order)
-1. ~~Feeding reliability~~ — SOLVED (see above).
-2. ~~Herd-build timing~~ — FIXED. Root causes were (a) wheat crops assigned to LOCKED
-   outer quadrants so no early feed (deadlock), fixed by an INTERLEAVED layout that puts
-   a balanced wheat/animal/melon mix on the unlocked NW tiles; (b) the animal-heavy mix
-   itself — a melon+egg mix earns far more per tile. Coins 6.6k -> 20k.
-3. **Labor routing / throughput (the scale wall, now the binding constraint)** —
-   even with ~12 workers the agent works only ~16 tiles (NW+NE); SW/SE sit empty and
-   even NW/NE are half-filled. Coins rose 20k->~26k just by hiring more, but the wall
-   is movement: workers spawn at the shed and the per-turn Hungarian re-plans every
-   step with NO multi-turn routes, so they zigzag and never service distant tiles.
-   The tapes work 50+ tiles via pre-optimized routes. Fixing this needs committed
-   multi-turn worker routes (a worker services several nearby tiles per shed trip),
-   not per-turn greedy assignment. This is the deep remaining problem.
-3. **Labor throughput / movement** — tending N animals + M crops requires ~N+M daily
-   visits; with ~9 workers and Manhattan movement, the schedule saturates. The
-   Hungarian minimizes per-turn distance but there's no multi-turn route planning.
-3. **Economy pacing** — balance building the herd vs funding it from crop/animal
-   income (melons don't pay until ~day 10). Currently over- or under-spends.
+## Bugs found & fixed (the real levers — all engine-mechanics, not routing)
+1. ~~Feeding reliability~~ — SOLVED.
+2. ~~Herd-build timing~~ — FIXED (interleaved NW layout + phased build).
+3. **HARVEST-on-immature-crops (the big one: ~26k -> ~46k).** Non-ongoing crops
+   (WHEAT/CARROT/MELON) get `yield_units=1` the instant they're PLANTED, but can't be
+   harvested until age >= `first_yield_day` (MELON=10 days), and their yield GROWS via
+   daily WATER between age 6-12 up to 6 units. The old task-gen fired a HARVEST task the
+   moment `yield_units>0`, so workers CAMPED on immature melons issuing ~4000 no-op
+   HARVESTs/game (banked only 88 melon!). Fix: `_crop_ready()` gates harvest on maturity
+   (non-ongoing: wait for full growth). This freed the whole fleet -> crops 11->37.
+4. **Herd over-buy / stuck-animal deadlock.** An animal *carried* by a worker was invisible
+   to both the shed and board counts -> a spurious extra buy -> a 5th cow with no empty
+   pasture, stuck forever, and the `pending==0` gate then froze all buying. Fix: count
+   placed+shed+carried per kind; never buy a kind past target.
+5. **Wheat over-buy pinned cash at ~$50.** We grow ~20 wheat/day (herd needs ~12) yet also
+   BOUGHT wheat every turn down to a $60 floor, flooding the shed with low-value wheat that
+   crashed its sale price. Fix: buying is an emergency backstop only, with a real reserve.
+6. **No end-game logic.** After ~day 27 stop all capital spend (animals/land/new crops that
+   can't mature) and liquidate — BUT keep re-hiring the crew daily (hands are cleared every
+   night), or there's nobody to harvest the final days.
+
+## The remaining gap to the tapes (~100k)
+Still ~44k vs `random` — roughly half the animal-meta tapes. Coverage tops out around
+NW+NE (~35 tiles); SW/SE are unlocked (~day 21) but barely worked. Candidate next levers:
+faster early build-out (reach full farm before ~day 15, not ~day 18), higher worker cap /
+better labor throughput to actually work SW/SE, CARE bonus exploitation, and market
+sell-price management (dynamic prices crash under volume). Zone-based routing was tried and
+*hurt* (workers forced to distant empty tiles) — reverted; labor is not yet the binding
+constraint, build-out speed and mix are.
 
 ## How to iterate (the loop is set up)
-Measure any change on the exact engine: run `coordinator.agent` vs an opponent,
-score herd (via `score_replay.score_seat`) and final coins. Target intermediate
-milestone: **herd 15 that SURVIVES + coins > 50k** (matching the animal-meta) before
-attempting the melon/care superior strategy the planner identified.
-
-Honest scope: this is the multi-week research problem. v1 establishes the
-architecture + a measured baseline; it is not yet a submittable agent.
+`scratchpad/bench_coord.py` runs the agent vs `random` across seeds and reports coins +
+per-quadrant coverage; `sweep*.py` vary the strategy mix. Measure every change on >=8 seeds.
