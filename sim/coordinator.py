@@ -330,18 +330,29 @@ class Coordinator:
                     orders.append(["BUY_PRODUCT", "WHEAT", buy]); cash -= buy * wprice
                     wheat += buy
 
-        # 3. crop seeds early — the income + free-feed engine (wheat grows feed for cash-free)
-        if seeds.get("WHEAT", 0) < 10 and cash >= 150:
-            orders.append(["BUY_SEED", "WHEAT", 10]); cash -= 100
-        if seeds.get("MELON", 0) < 3 and day <= 12 and cash >= 600:
-            orders.append(["BUY_SEED", "MELON", 3]); cash -= 240
+        # 3. crop seeds — buy enough to actually FILL the empty target tiles (they sit empty
+        #    otherwise). WHEAT = free feed; MELON = income engine (top per-tile value).
+        def open_crop(kind):
+            return sum(1 for tile, k in self.st.crop_tiles.items()
+                       if k == kind and _tile(farm, *tile) is None)
+        if seeds.get("WHEAT", 0) < min(8, open_crop("WHEAT")) and cash >= 150:
+            orders.append(["BUY_SEED", "WHEAT", 8]); cash -= 80
+        if seeds.get("MELON", 0) < 4 and day <= 14 and cash >= 600:
+            orders.append(["BUY_SEED", "MELON", 4]); cash -= 320
         if seeds.get("STRAWBERRY", 0) < 1 and 3 <= day <= 16 and cash >= 900:
             orders.append(["BUY_SEED", "STRAWBERRY", 1]); cash -= 100
 
-        # 4. hire — scaled to work, but keep a big reserve early (survival phase)
-        if hour < 3:
-            reserve = 900 if day < 10 else 300
-            want = min(9, 3 + herd // 3)
+        # 4. hire enough workers to actually WORK the tiles — the tapes run ~10-12.
+        #    Scale with the number of unmet tasks (empty target tiles + animals to tend),
+        #    keeping a cash reserve early. Too few workers = tiles sit empty = no income.
+        if hour < 4:
+            open_targets = 0
+            for tile, kind in list(self.st.crop_tiles.items()) + list(self.st.animal_tiles.items()):
+                cell = _tile(farm, *tile)
+                if cell is None or (isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP") and not cell.get("animal")):
+                    open_targets += 1
+            want = min(12, max(4, 4 + herd + open_targets // 6))
+            reserve = 700 if day < 8 else 200
             for _ in range(max(0, want - hires)):
                 c = self._fib(hires)
                 if cash >= c + reserve:

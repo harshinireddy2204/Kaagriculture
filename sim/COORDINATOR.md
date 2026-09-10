@@ -33,8 +33,14 @@ turning a good *strategy* into an *executable* agent (the path to SpaTaro's ~290
    outer quadrants so no early feed (deadlock), fixed by an INTERLEAVED layout that puts
    a balanced wheat/animal/melon mix on the unlocked NW tiles; (b) the animal-heavy mix
    itself — a melon+egg mix earns far more per tile. Coins 6.6k -> 20k.
-3. **Scale / opponent strength** — 20k is vs `random`; needs testing vs real agents and
-   scaling production (more tiles worked, land expansion) toward the ~100k tapes.
+3. **Labor routing / throughput (the scale wall, now the binding constraint)** —
+   even with ~12 workers the agent works only ~16 tiles (NW+NE); SW/SE sit empty and
+   even NW/NE are half-filled. Coins rose 20k->~26k just by hiring more, but the wall
+   is movement: workers spawn at the shed and the per-turn Hungarian re-plans every
+   step with NO multi-turn routes, so they zigzag and never service distant tiles.
+   The tapes work 50+ tiles via pre-optimized routes. Fixing this needs committed
+   multi-turn worker routes (a worker services several nearby tiles per shed trip),
+   not per-turn greedy assignment. This is the deep remaining problem.
 3. **Labor throughput / movement** — tending N animals + M crops requires ~N+M daily
    visits; with ~9 workers and Manhattan movement, the schedule saturates. The
    Hungarian minimizes per-turn distance but there's no multi-turn route planning.
