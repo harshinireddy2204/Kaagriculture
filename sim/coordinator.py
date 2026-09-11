@@ -137,6 +137,7 @@ class Coordinator:
         quads = list(_g(farm, "unlocked_quadrants", []) or [])
         hires = int(_g(farm, "hires_today", 0) or 0)
         prices = _g(_g(obs, "market", {}) or {}, "prices", {}) or {}
+        opp = farms[1 - seat] if len(farms) > 1 else {}
 
         positions = [tuple(_g(farm, "farmer") or (4, 4))] + [tuple(p) for p in (_g(farm, "hands", []) or [])]
         n = len(positions)
@@ -160,7 +161,7 @@ class Coordinator:
                         if t.get("animal"): cur_animals[(x, y)] = t
         herd = len(cur_animals)
 
-        market = self._market(farm, shed, seeds, money, quads, hires, prices, day, hour, herd, invs)
+        market = self._market(farm, shed, seeds, money, quads, hires, prices, day, hour, herd, invs, opp)
 
         cmds = self._route(positions, invs, farm, dict(shed), seeds, quads, day, weeds)
         return {"farmer": cmds[0], "hands": cmds[1:], "market": market[:10]}
@@ -485,11 +486,12 @@ class Coordinator:
             a, b = b, a + b
         return a
 
-    def _market(self, farm, shed, seeds, money, quads, hires, prices, day, hour, herd, invs=None):
+    def _market(self, farm, shed, seeds, money, quads, hires, prices, day, hour, herd, invs=None, opp=None):
         st = self.st
         orders = []
         cash = money
         invs = invs or []
+        opp = opp or {}
         wheat = int(shed.get("WHEAT", 0) or 0)
         wprice = max(1, int(prices.get("WHEAT", 25) or 25))
         feed_need = max(2, herd)  # 1 wheat/animal/day; keep ~2 days buffer below
@@ -497,11 +499,46 @@ class Coordinator:
         # capital spend and just keep the herd fed while we liquidate inventory into cash.
         endgame = day >= 27
 
-        # 1. SELL products (never sell wheat below feed buffer)
+        # 1. SELL products — PRICE-RESPONSIVE and OPPONENT-AWARE. The market price is shared
+        #    and every unit sold pushes it down (persisting), while town demand slowly drains
+        #    supply and lets it recover. So the live price already encodes the opponent's
+        #    dumping: sell hard when the price is healthy, but HOLD a good the opponent has
+        #    crashed (or is about to flood) and let it recover instead of dumping into the floor.
+        #    Overrides: near shed cap (must offload or the nightly drop discards it) and endgame.
+        BASE = {"MILK": 160, "WOOL": 200, "EGG": 50, "STRAWBERRY": 120, "MELON": 250,
+                "FERTILIZER": 100, "CARROT": 40, "TOMATO": 90}
+        shed_total = sum(int(v or 0) for v in shed.values())
+        shed_pressure = shed_total >= 82   # shed cap is 100 (seeds excluded) -> offload early
+        # estimate the opponent's supply of each product from their visible farm (their shed is
+        # hidden, but their animals/crops tell us what they'll be dumping soon).
+        opp_supply = {"MILK": 0, "WOOL": 0, "EGG": 0, "STRAWBERRY": 0, "MELON": 0}
+        for row in (_g(opp, "tiles", []) or []):
+            for t in (row or []):
+                if not isinstance(t, dict):
+                    continue
+                a = t.get("animal")
+                if a == "COW": opp_supply["MILK"] += 1
+                elif a == "SHEEP": opp_supply["WOOL"] += 1
+                elif a == "GOOSE": opp_supply["EGG"] += 1
+                elif t.get("kind") == "PLANT" and t.get("crop") in opp_supply:
+                    opp_supply[t["crop"]] += 1
         for g in ("MILK", "WOOL", "EGG", "STRAWBERRY", "MELON", "FERTILIZER", "CARROT"):
+            keep = 0 if endgame else 1
             have = int(shed.get(g, 0) or 0)
-            if have > 1:
-                orders.append(["SELL", g, have - 1])
+            if have <= keep:
+                continue
+            avail = have - keep
+            price = int(prices.get(g, BASE.get(g, 50)) or 1)
+            ratio = price / max(1, BASE.get(g, 50))
+            opp_flood = opp_supply.get(g, 0) >= 6   # they'll keep pushing this price down -> sell now
+            if endgame or shed_pressure or ratio >= 0.70 or opp_flood:
+                qty = avail                       # healthy price / must-offload -> sell it all
+            elif ratio >= 0.45:
+                qty = max(1, avail // 2)          # mediocre -> take half, hold half for recovery
+            else:
+                qty = 0                           # crashed -> hold; town demand will lift it
+            if qty > 0:
+                orders.append(["SELL", g, qty])
         # keep enough wheat to feed the herd we're GROWING toward, not just today's herd,
         # so the herd-growth gate below is never starved (that deadlocked herd at 4-7).
         target_herd = st.cows + st.sheep + st.geese

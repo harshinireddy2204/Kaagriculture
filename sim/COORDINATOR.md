@@ -103,10 +103,19 @@ shed->sweep cluster (feed/water/harvest/care/collect, accumulating produce)->she
 (strawberry) with spare capacity -> +2/production when watered = double harvest. Restricted to
 strawberry (melon caps via watering anyway). Lifted the mixed config 58.5k -> 62k.
 
-Current best config: 3cow/1sheep/3goose/15melon/15straw/12wheat, herd 7, ~62k vs random.
-Still ~half the top-3000 replays (130k-183k) and loses to rescue2800. The remaining gap is
-raw per-worker throughput; the next real levers are opponent/town/market ADAPTATION (relative
-score) rather than more absolute coins. **rescue2800 stays the submitted ladder agent.**
+**Opponent/market ADAPTATION (BUILT).** Selling is now price-responsive and opponent-aware:
+the shared market price already encodes the opponent's dumping, so we sell hard when a good's
+price is healthy (>=0.7x base) and HOLD a good the opponent has crashed or is about to flood
+(counted from their visible farm), letting town demand recover it — with shed-cap and endgame
+liquidation overrides. Result: 62k -> 63.3k vs random (no regression), and head-to-head vs the
+top tapes we WIN vs ymg_aq (57k vs 39k) but still LOSE to feel-the-agi (~44k vs ~144k) and
+SpaTaro (~41k vs ~105k). Lesson: price-timing helps vs low/mid-volume sellers, but a
+high-volume dumper (feel-the-agi: 36 animals + 45 crops) wins on sheer production regardless
+of price. **Throughput, not selling, is the binding constraint.**
+
+Current best config: 3cow/1sheep/3goose/15melon/15straw/12wheat, herd 7, ~63k vs random.
+To beat the robust top agents needs ~2x per-worker throughput (the hard routing problem).
+**rescue2800 stays the submitted ladder agent.**
 
 ## How to iterate (the loop is set up)
 `scratchpad/bench_coord.py` runs the agent vs `random` across seeds and reports coins +
