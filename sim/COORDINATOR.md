@@ -113,8 +113,23 @@ SpaTaro (~41k vs ~105k). Lesson: price-timing helps vs low/mid-volume sellers, b
 high-volume dumper (feel-the-agi: 36 animals + 45 crops) wins on sheer production regardless
 of price. **Throughput, not selling, is the binding constraint.**
 
-Current best config: 3cow/1sheep/3goose/15melon/15straw/12wheat, herd 7, ~63k vs random.
-To beat the robust top agents needs ~2x per-worker throughput (the hard routing problem).
+## Throughput investigation (measured precisely)
+Instrumented the full economy at the ceiling. The cap is NOT market saturation and NOT
+selling — vs random every good sells at 92-193% of base. It is HARVEST THROUGHPUT:
+- Gross SELL revenue is ~117k (near the 120k target!) but ~half is a WHEAT CHURN — we buy 997
+  wheat (~40k) while selling 949 wheat (~40k), roughly cash-neutral (feeding pickups
+  momentarily empty the shed and trigger emergency buys). Real net ~62k.
+- Action budget: 55% MOVEMENT, 24% USEFUL, 17% IDLE, 2.26 moves/useful. The top tapes get
+  ~43% useful with the same ~13 workers — that ~1.8x action-efficiency IS the 62k->140k gap.
+- Tried to close it: (a) idle workers help globally -> useful 24%->35% but coins DROPPED
+  (roaming disrupts crop watering -> deaths); (b) counting worker-held wheat to stop the churn
+  -> herd COLLAPSED (the herd-growth gate `wheat_ok` reads shed wheat, so it's load-bearing) —
+  reverted; (c) idle workers HARVEST/COLLECT ripe value only (non-disruptive) -> helps the
+  big-crop config (62k->64k) but hurts the small one. Adopted with the big-crop default.
+
+Current best config: 2cow/1sheep/2goose/32melon/24straw/14wheat, herd 5, ~63k vs random
+(min 55k, more robust). The per-turn router plateaus ~63k; true tape-level route optimization
+(a worker pre-planning a full multi-turn circuit) is the remaining unlock for ~120k.
 **rescue2800 stays the submitted ladder agent.**
 
 ## How to iterate (the loop is set up)

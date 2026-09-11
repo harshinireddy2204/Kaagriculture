@@ -46,7 +46,7 @@ class Strategy:
     STRAWBERRY as the dominant crop. Strawberry is ONGOING (plant once, harvest every 2 days
     all game) so it needs almost no replant labor -- that freed labor is what lets the fleet
     tend a large herd, which is why melon (constant 12-day replant cycles) scored far worse."""
-    def __init__(self, cows=3, sheep=1, geese=3, melons=15, straw=15, wheat=12,
+    def __init__(self, cows=2, sheep=1, geese=2, melons=32, straw=24, wheat=14,
                  land_days=(3, 5, 8)):
         self.cows, self.sheep, self.geese = cows, sheep, geese
         self.melons, self.straw, self.wheat = melons, straw, wheat
@@ -338,13 +338,27 @@ class Coordinator:
                 tile = min(cand, key=lambda c: _dist(pos, c))
                 return ["FERTILIZE"] if pos == tile else [_step_toward(pos, tile)]
 
-        # 6. nothing to do in the cluster: bank produce, else help dig a weed, else idle at shed
-        if produce > 0:
+        # 6. cluster done. Bank a full load, then use spare capacity to HARVEST/COLLECT ripe
+        #    value ANYWHERE (non-disruptive: banking produce someone would collect anyway,
+        #    unlike watering/planting another worker's tiles). This soaks up idle time and lets
+        #    a bigger farm's ripe crops get collected before they over-ripen.
+        if produce >= 12:
             return ["DROP"] if at_shed else to_shed()
+        best, bd = None, 10 ** 9
+        for t in (list(self.st.animal_tiles) + list(self.st.crop_tiles)):
+            need = self._tile_need(farm, t, day, seeds)
+            if need and need[0] in ("HARVEST", "COLLECT_FERTILIZER"):
+                d = _dist(pos, t)
+                if d < bd:
+                    bd, best = d, t
+        if best is not None:
+            return [self._tile_need(farm, best, day, seeds)[0]] if pos == best else [_step_toward(pos, best)]
         if weeds:
             w = min(weeds, key=lambda c: _dist(pos, c))
             return ["DIG"] if pos == w else [_step_toward(pos, w)]
-        return ["PASS"] if at_shed else to_shed()
+        if produce > 0:
+            return ["DROP"] if at_shed else to_shed()
+        return ["PASS"]
 
     def _all_place(self, farm):
         out = []
