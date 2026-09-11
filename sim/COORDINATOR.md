@@ -88,12 +88,25 @@ WHY, precisely (measured, not guessed):
   price-crashing dumps eat the little income. Same wall regardless of crop.
 - So within this architecture the optimum is the LIGHT-herd (7) diversified mix (~61k).
 
-**THE one lever left = multi-turn worker ROUTING.** Every worker action budget is ~75%
-movement; the tapes encode circuits (a worker waters+harvests a local cluster, drops, repeats)
-so almost every action is useful. Per-turn Hungarian re-picks the global-nearest task each
-step -> zigzag -> ~50-tile ceiling. Committed local circuits are the untried fix (zoning was
-a cruder version and hurt). This is the multi-week problem; until it's solved the from-scratch
-agent plateaus ~61k and **rescue2800 stays the submitted ladder agent.**
+**Committed-circuit router (BUILT).** Replaced the per-turn Hungarian with `_route`/`_worker_cmd`:
+each worker OWNS a persistent spatial cluster (`_clusters`, serpentine chunks) and loops
+shed->sweep cluster (feed/water/harvest/care/collect, accumulating produce)->shed drop. Result:
+- It DID break part of the wall — a herd-12 farm went 23k (Hungarian) -> 57k (router).
+- But it did NOT raise the overall ceiling: herd-7 still ~62k, and big herds (17+) still crash
+  (strawberry banked 73/34 tiles; cash pinned) because 13 workers still can't fully service a
+  75-tile + big-herd farm even on circuits. A herd-size sweep stays monotonic-wrong.
+- Diagnostics at the ceiling: workers PASS ~17% (spare labor) yet adding crops past ~58 tiles
+  overloads and drops coins -> the true limit is per-worker throughput, and the tapes simply
+  get ~2x more useful actions per worker.
+
+**FERTILIZE pipeline (BUILT).** Workers now apply collected fertilizer to ONGOING crops
+(strawberry) with spare capacity -> +2/production when watered = double harvest. Restricted to
+strawberry (melon caps via watering anyway). Lifted the mixed config 58.5k -> 62k.
+
+Current best config: 3cow/1sheep/3goose/15melon/15straw/12wheat, herd 7, ~62k vs random.
+Still ~half the top-3000 replays (130k-183k) and loses to rescue2800. The remaining gap is
+raw per-worker throughput; the next real levers are opponent/town/market ADAPTATION (relative
+score) rather than more absolute coins. **rescue2800 stays the submitted ladder agent.**
 
 ## How to iterate (the loop is set up)
 `scratchpad/bench_coord.py` runs the agent vs `random` across seeds and reports coins +

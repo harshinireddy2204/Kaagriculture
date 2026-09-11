@@ -53,8 +53,9 @@ class Strategy:
         self.land_days = land_days
         ring = _ring()
         # Proportional interleave: place every kind at evenly-spaced fractional positions so
-        # animals are spread through the whole worked area (short feed walks everywhere) while
-        # the dominant crop fills the rest, instead of clumping animals in one quadrant.
+        # animals are spread through the worked area (a few per cluster = local feed) while the
+        # value crops fill the rest and every quadrant gets crops early. (Clumping all animals
+        # by the shed pushed the value crops out to late-unlocking tiles and scored worse.)
         counts = [("COW", cows), ("SHEEP", sheep), ("GOOSE", geese),
                   ("WHEAT", wheat), ("MELON", melons), ("STRAWBERRY", straw)]
         total = sum(n for _, n in counts) or 1
@@ -119,6 +120,8 @@ def _crop_ready(t, day):
 class Coordinator:
     def __init__(self, strategy=None):
         self.st = strategy or Strategy()
+        self._cl = []          # worker index -> its cluster of tiles (persistent beat)
+        self._cl_key = None    # (n_workers, unlocked-quadrants) the clusters were built for
 
     def act(self, obs):
         seat = 1 if int(_g(obs, "player", 0) or 0) == 1 else 0
@@ -159,36 +162,196 @@ class Coordinator:
 
         market = self._market(farm, shed, seeds, money, quads, hires, prices, day, hour, herd, invs)
 
-        # ---- build task list: (kind, tile, needs) ----
-        tasks = []
-        # basic needs first
-        for (x, y), t in cur_animals.items():
-            if not t.get("fed_today"): tasks.append(("FEED", (x, y), "WHEAT"))
-        for (x, y), t in cur_crops.items():
-            if not t.get("watered_today"): tasks.append(("WATER", (x, y), None))
-        for (x, y), t in cur_animals.items():
-            if int(t.get("yield_units", 0) or 0) > 0: tasks.append(("HARVEST", (x, y), None))
-        for (x, y), t in cur_crops.items():
-            if _crop_ready(t, day): tasks.append(("HARVEST", (x, y), None))
-        for (x, y), t in cur_animals.items():
-            if not t.get("cared_today"): tasks.append(("CARE", (x, y), None))
-        for (x, y), t in cur_animals.items():
-            if t.get("fertilizer_available"): tasks.append(("COLLECT_FERTILIZER", (x, y), None))
-        # build/place/plant toward the target layout
+        cmds = self._route(positions, invs, farm, dict(shed), seeds, quads, day, weeds)
+        return {"farmer": cmds[0], "hands": cmds[1:], "market": market[:10]}
+
+    # ================= COMMITTED-CIRCUIT ROUTER =================
+    # Each worker OWNS a persistent spatial cluster and runs a loop: pick up wheat at the
+    # shed -> sweep its cluster (feed animals, water/harvest/care/collect crops, accumulating
+    # produce in inventory) -> return to the shed to DROP -> repeat. This keeps nearly every
+    # action useful, versus the per-turn global Hungarian which re-chose the nearest task each
+    # step and left workers ~75% walking (a ~50-tile / herd-7 ceiling).
+
+    def _tile_need(self, farm, tile, day, seeds):
+        """What action does this target tile need right now? -> (action, arg) or None."""
+        x, y = tile
+        cell = _tile(farm, x, y)
+        if tile in self.st.animal_tiles:
+            kind = self.st.animal_tiles[tile]
+            if cell is None:
+                return ("BUILD_" + ("COOP" if kind == "GOOSE" else "PASTURE"), None)
+            if isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP"):
+                if not cell.get("animal"):
+                    return ("PLACE", kind)
+                if not cell.get("fed_today"):
+                    return ("FEED", "WHEAT")
+                if int(cell.get("yield_units", 0) or 0) > 0:
+                    return ("HARVEST", None)
+                if not cell.get("cared_today"):
+                    return ("CARE", None)
+                if cell.get("fertilizer_available"):
+                    return ("COLLECT_FERTILIZER", None)
+            return None
+        if tile in self.st.crop_tiles:
+            kind = self.st.crop_tiles[tile]
+            if cell is None:
+                return ("PLANT_" + kind, None) if int(seeds.get(kind, 0) or 0) > 0 else None
+            if isinstance(cell, dict):
+                if cell.get("kind") == "WEED":
+                    return ("DIG", None)
+                if cell.get("kind") == "PLANT":
+                    if not cell.get("watered_today"):
+                        return ("WATER", None)
+                    if _crop_ready(cell, day):
+                        return ("HARVEST", None)
+            return None
+        return None
+
+    def _clusters(self, n, quads, weeds):
+        """Partition worked tiles into n spatially-contiguous beats (serpentine within each
+        quadrant so a chunk is a compact block). Cached per (n, unlocked-quadrants)."""
+        key = (n, tuple(sorted(quads)))
+        if key == self._cl_key:
+            return self._cl
+        tgt = [t for t in (list(self.st.animal_tiles) + list(self.st.crop_tiles))
+               if K._quadrant_of(t[0], t[1], 10) in quads]
+
+        def skey(t):
+            x, y = t
+            q = _QORDER.get(K._quadrant_of(x, y, 10), 9)
+            return (q, y, x if y % 2 == 0 else -x)
+
+        tgt.sort(key=skey)
+        cl = [[] for _ in range(max(1, n))]
+        if tgt and n > 0:
+            import math as _m
+            per = max(1, _m.ceil(len(tgt) / n))
+            for i in range(n):
+                cl[i] = tgt[i * per:(i + 1) * per]
+        self._cl, self._cl_key = cl, key
+        return cl
+
+    def _route(self, positions, invs, farm, shed_stock, seeds, quads, day, weeds):
+        n = len(positions)
+        clusters = self._clusters(n, quads, weeds)
+        cmds = [None] * n
+        for i in range(n):
+            cl = clusters[i] if i < len(clusters) else []
+            cmds[i] = self._worker_cmd(positions[i], invs[i], cl, farm, shed_stock, seeds, day, weeds)
+        return [c or ["PASS"] for c in cmds]
+
+    def _worker_cmd(self, pos, inv, cluster, farm, shed_stock, seeds, day, weeds):
+        SELLABLE = ("MILK", "WOOL", "EGG", "STRAWBERRY", "MELON", "CARROT", "TOMATO", "FERTILIZER")
+        at_shed = pos in SHED
+        wheat = int(inv.get("WHEAT", 0) or 0)
+        carry_animal = next((a for a in ("COW", "SHEEP", "GOOSE") if inv.get(a, 0)), None)
+        produce = sum(int(inv.get(g, 0) or 0) for g in SELLABLE)
+
+        def to_shed():
+            sp = min(SHED, key=lambda c: _dist(pos, c))
+            return [_step_toward(pos, sp)]
+
+        # collect this cluster's live needs
+        hungry = []; place = []; other = []
+        n_animals = 0
+        for t in cluster:
+            if t in self.st.animal_tiles:
+                n_animals += 1
+            need = self._tile_need(farm, t, day, seeds)
+            if not need:
+                continue
+            act = need[0]
+            if act == "FEED":
+                hungry.append(t)
+            elif act == "PLACE":
+                place.append((t, need[1]))
+            else:
+                other.append((t, act))
+
+        # 1. carrying an animal -> place it at the nearest empty struct (its cluster first)
+        if carry_animal:
+            targets = [t for t, k in place if k == carry_animal] or \
+                      [t for t, k in self._all_place(farm) if k == carry_animal]
+            if targets:
+                tile = min(targets, key=lambda c: _dist(pos, c))
+                return ["PLACE", carry_animal] if pos == tile else [_step_toward(pos, tile)]
+            # nowhere to place -> drop it back at shed
+            return ["DROP"] if at_shed else to_shed()
+
+        # 2. at the shed: bank produce, then load wheat / fetch an animal for the cluster
+        if at_shed:
+            if produce > 0:
+                return ["DROP"]
+            if hungry and wheat <= 0 and int(shed_stock.get("WHEAT", 0) or 0) > 0:
+                take = min(10, int(shed_stock.get("WHEAT", 0)))
+                shed_stock["WHEAT"] = int(shed_stock.get("WHEAT", 0)) - take
+                return ["PICKUP", "WHEAT", take]
+            for t, k in place:
+                if int(shed_stock.get(k, 0) or 0) > 0:
+                    shed_stock[k] = int(shed_stock.get(k, 0)) - 1
+                    return ["PICKUP", k, 1]
+
+        # 3. hungry animals in cluster: feed if we have wheat, else go load wheat
+        if hungry:
+            if wheat > 0:
+                tile = min(hungry, key=lambda c: _dist(pos, c))
+                return ["FEED"] if pos == tile else [_step_toward(pos, tile)]
+            if int(shed_stock.get("WHEAT", 0) or 0) > 0:
+                return to_shed()
+
+        # 4. empty struct needing an animal that's in the shed -> go fetch it
+        if place and any(int(shed_stock.get(k, 0) or 0) > 0 for _, k in place):
+            return to_shed()
+
+        # 5. service the nearest remaining cluster tile (water/harvest/care/collect/plant/build)
+        if other:
+            tile, act = min(other, key=lambda ta: _dist(pos, ta[0]))
+            if pos != tile:
+                return [_step_toward(pos, tile)]
+            base = act.split("_")[0]
+            if base == "PLANT":
+                return ["PLANT", act.split("_", 1)[1]]
+            if base in ("BUILD", "COLLECT"):
+                return [act]
+            return [base]
+
+        # 5.5 spare capacity + carrying fertilizer -> FERTILIZE a producing cluster crop.
+        # On a watered production day a fertilized crop yields 2 instead of 1, so harvesting
+        # each cycle doubles output; unused fertilizer just gets dropped & sold instead.
+        if int(inv.get("FERTILIZER", 0) or 0) > 0:
+            cand = []
+            for t in cluster:
+                if t in self.st.crop_tiles:
+                    cell = _tile(farm, *t)
+                    if isinstance(cell, dict) and cell.get("kind") == "PLANT" \
+                            and int(cell.get("fertilized_until_day", -1) or -1) < day:
+                        cd = K.CROPS.get(cell.get("crop"))
+                        # only ONGOING crops (strawberry) gain: fertilized+watered production
+                        # days yield 2 instead of 1, so harvesting each cycle doubles output.
+                        # Non-ongoing (melon) already caps at max_yield via daily watering.
+                        if cd and cd.get("ongoing"):
+                            age = day - int(cell.get("planted_day", day) or 0)
+                            if age <= cd["max_yield_day"] + cd["interval"] * cd["max_yield"]:
+                                cand.append(t)
+            if cand:
+                tile = min(cand, key=lambda c: _dist(pos, c))
+                return ["FERTILIZE"] if pos == tile else [_step_toward(pos, tile)]
+
+        # 6. nothing to do in the cluster: bank produce, else help dig a weed, else idle at shed
+        if produce > 0:
+            return ["DROP"] if at_shed else to_shed()
+        if weeds:
+            w = min(weeds, key=lambda c: _dist(pos, c))
+            return ["DIG"] if pos == w else [_step_toward(pos, w)]
+        return ["PASS"] if at_shed else to_shed()
+
+    def _all_place(self, farm):
+        out = []
         for tile, kind in self.st.animal_tiles.items():
             cell = _tile(farm, *tile)
-            if cell is None:
-                tasks.append(("BUILD_" + ("COOP" if kind == "GOOSE" else "PASTURE"), tile, None))
-            elif isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP") and not cell.get("animal"):
-                tasks.append(("PLACE", tile, kind))   # needs the animal carried
-        for tile, kind in self.st.crop_tiles.items():
-            if _tile(farm, *tile) is None and seeds.get(kind, 0) > 0:
-                tasks.append(("PLANT_" + kind, tile, None))
-        for w in weeds:
-            tasks.append(("DIG", w, None))
-
-        cmds = self._assign(positions, invs, tasks, shed, cur_animals)
-        return {"farmer": cmds[0], "hands": cmds[1:], "market": market[:10]}
+            if isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP") and not cell.get("animal"):
+                out.append((tile, kind))
+        return out
 
     def _assign(self, positions, invs, tasks, shed, cur_animals):
         n = len(positions)
