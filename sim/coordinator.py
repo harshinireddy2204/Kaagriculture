@@ -602,7 +602,7 @@ class Coordinator:
                 if cell is None or (isinstance(cell, dict) and cell.get("kind") in ("PASTURE", "COOP") and not cell.get("animal")):
                     open_targets += 1
             want = min(13, max(4, 4 + herd + open_targets // 6))
-            reserve = 700 if day < 8 else 200
+            reserve = 350 if day < 8 else 200   # build the crew fast; early income repays it
             for _ in range(max(0, want - hires)):
                 c = self._fib(hires)
                 if cash >= c + reserve:
@@ -645,7 +645,7 @@ class Coordinator:
         ld = st.land_days if st.land_days else (3, 6, 12)
         if not endgame and 1 <= nq < 3 and day >= ld[nq - 1]:
             cost = (1000, 2000, 4000)[nq - 1]
-            if cash >= cost + 800:
+            if cash >= cost + 300:   # expand early — an extra quadrant working by day 5 pays off
                 orders.append(["BUY_LAND"]); cash -= cost
         return orders
 
