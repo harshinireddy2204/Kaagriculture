@@ -236,9 +236,20 @@ class Coordinator:
         n = len(positions)
         clusters = self._clusters(n, quads, weeds)
         cmds = [None] * n
+        # Reserve seeds ACROSS workers within the turn: seeds are a shared pool, so if several
+        # workers each see the same count and all issue PLANT, only as many succeed as there are
+        # seeds and the rest are silent no-ops (audit: 206 wasted PLANTs/game). Decrement a live
+        # copy as each worker commits a PLANT so later workers don't target a depleted seed.
+        seed_left = dict(seeds)
         for i in range(n):
             cl = clusters[i] if i < len(clusters) else []
-            cmds[i] = self._worker_cmd(positions[i], invs[i], cl, farm, shed_stock, seeds, day, weeds)
+            c = self._worker_cmd(positions[i], invs[i], cl, farm, shed_stock, seed_left, day, weeds)
+            if c and c[0] == "PLANT" and len(c) > 1:
+                if int(seed_left.get(c[1], 0) or 0) > 0:
+                    seed_left[c[1]] = int(seed_left.get(c[1], 0)) - 1
+                else:
+                    c = ["PASS"]   # seed already claimed by an earlier worker this turn
+            cmds[i] = c
         return [c or ["PASS"] for c in cmds]
 
     def _worker_cmd(self, pos, inv, cluster, farm, shed_stock, seeds, day, weeds):
