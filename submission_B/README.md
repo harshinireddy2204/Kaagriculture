@@ -11,6 +11,14 @@ notebook agent. Single-file, **stdlib-only**, self-contained; last callable is
 - Why it should climb: our live losses were photo-finishes (median ~-2.9k on ~100k totals);
   an agent +2.5k stronger than v35 should flip a large share of them.
 
+## Action-contract guard (ported Sep 12)
+`main.py` now ends with the **EXP-173H final submission guard** (from the EXP-173H2 build).
+It validates/repairs every unit + market command, clamps to 10 orders, and pads hands to the
+real count. It is **behavior-neutral**: guarded-vs-plain moreyield is 0W/0L/16D (mean +0.0,
+every game exactly 0 margin), and over a full game it logs `guard_repairs=0` — a pure
+pass-through in normal play. Its only job is to fail closed if an overlay ever emits malformed
+output on Kaggle's live engine. Pure robustness insurance, no rating cost.
+
 ## Rollout (safe)
 Two active slots. Recommended:
 - Keep the proven **v35 (2562)** — saved at `../submission_B_v35/main.py` — in one slot.

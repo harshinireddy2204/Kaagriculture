@@ -2354,3 +2354,180 @@ _R53_LABOR_COMBINED={}
 agent.telemetry=_R53_LABOR_COMBINED
 agent=globals().pop('agent')
 
+
+
+# ---------------------------------------------------------------------------
+# EXP-173H final submission guard (ported onto moreyield primary)
+#
+# Policy-neutral: every valid parent action is returned unchanged.  It only
+# repairs the external Kaggle action contract if an overlay emits malformed
+# output or falls back with the wrong hand count.
+# ---------------------------------------------------------------------------
+_EXP173H_PARENT = agent
+_EXP173H_REPORT = {
+    "guard_calls": 0,
+    "guard_repairs": 0,
+    "guard_parent_errors": 0,
+    "guard_unit_repairs": 0,
+    "guard_market_repairs": 0,
+}
+
+_EXP173H_UNIT_OPS = set(MOVES) | {
+    "PASS", "DROP", "PICKUP", "PLACE", "PLANT", "WATER", "HARVEST",
+    "FERTILIZE", "DIG", "BUILD_COOP", "BUILD_PASTURE", "FEED",
+    "COLLECT_FERTILIZER", "CARE",
+}
+_EXP173H_NOARG_UNIT_OPS = set(MOVES) | {
+    "PASS", "DROP", "WATER", "HARVEST", "FERTILIZE", "DIG",
+    "BUILD_COOP", "BUILD_PASTURE", "FEED", "COLLECT_FERTILIZER", "CARE",
+}
+_EXP173H_MARKET_ITEMS = set(PRODUCTS) | set(SEED_PRICE) | set(ANIMAL_COST)
+
+
+def _exp173h_hand_count(observation):
+    """Return the real number of hired hands without trusting action output."""
+    try:
+        player = _int(_get(observation, "player", 0))
+        farms = list(_get(observation, "farms", []) or [])
+        farm = farms[player]
+        return max(0, min(64, len(list(_get(farm, "hands", []) or []))))
+    except Exception:
+        return 0
+
+
+def _exp173h_unit(command):
+    """Validate one unit command; malformed commands become PASS."""
+    if not isinstance(command, (list, tuple)) or not command:
+        return ["PASS"], True
+    command = list(command)
+    op = command[0]
+    if op not in _EXP173H_UNIT_OPS:
+        return ["PASS"], True
+    if op in _EXP173H_NOARG_UNIT_OPS:
+        repaired = command != [op]
+        return [op], repaired
+    if op in ("PICKUP", "PLACE"):
+        if len(command) < 2 or command[1] not in _EXP173H_MARKET_ITEMS:
+            return ["PASS"], True
+        if len(command) >= 3:
+            if type(command[2]) is not int or command[2] <= 0:
+                return ["PASS"], True
+            normalized = [op, command[1], command[2]]
+        else:
+            normalized = [op, command[1]]
+        return normalized, normalized != command
+    if op == "PLANT":
+        if len(command) < 2 or command[1] not in SEED_PRICE:
+            return ["PASS"], True
+        normalized = [op, command[1]]
+        return normalized, normalized != command
+    return ["PASS"], True
+
+
+def _exp173h_market(order):
+    """Validate one market order while preserving intentional zero SELL slots."""
+    # Empty list entries are deliberate no-op race slots in the screened tapes.
+    # They must count toward the ten-order limit and remain in their exact place.
+    if isinstance(order, (list, tuple)) and not order:
+        return [], False
+    if not isinstance(order, (list, tuple)):
+        return None, True
+    order = list(order)
+    op = order[0]
+    if op in ("HIRE", "BUY_LAND"):
+        normalized = [op]
+        return normalized, normalized != order
+    if op not in ("BUY_SEED", "BUY_PRODUCT", "BUY_ANIMAL", "SELL"):
+        return None, True
+    if len(order) < 3 or type(order[2]) is not int:
+        return None, True
+    item, quantity = order[1], order[2]
+    valid_item = (
+        (op == "BUY_SEED" and item in SEED_PRICE)
+        or (op == "BUY_PRODUCT" and item in ("WHEAT", "FERTILIZER"))
+        or (op == "BUY_ANIMAL" and item in ANIMAL_COST)
+        or (op == "SELL" and item in PRODUCTS)
+    )
+    # A zero SELL is intentionally retained by the sale-reservation layer to
+    # preserve market order slots.  Other zero/negative quantities are removed.
+    valid_quantity = quantity > 0 or (op == "SELL" and quantity == 0)
+    if not valid_item or not valid_quantity:
+        return None, True
+    normalized = [op, item, quantity]
+    return normalized, normalized != order
+
+
+def _exp173h_sanitize(observation, configuration, action):
+    repaired = False
+    unit_repairs = 0
+    market_repairs = 0
+    hand_count = _exp173h_hand_count(observation)
+
+    if not isinstance(action, dict):
+        action = {}
+        repaired = True
+    farmer, changed = _exp173h_unit(action.get("farmer", ["PASS"]))
+    repaired |= changed
+    unit_repairs += int(changed)
+
+    raw_hands = action.get("hands", [])
+    if not isinstance(raw_hands, list):
+        raw_hands = []
+        repaired = True
+        unit_repairs += 1
+    hands = []
+    for index in range(hand_count):
+        command = raw_hands[index] if index < len(raw_hands) else ["PASS"]
+        normalized, changed = _exp173h_unit(command)
+        hands.append(normalized)
+        repaired |= changed or index >= len(raw_hands)
+        unit_repairs += int(changed or index >= len(raw_hands))
+    if len(raw_hands) != hand_count:
+        repaired = True
+
+    raw_market = action.get("market", [])
+    if not isinstance(raw_market, list):
+        raw_market = []
+        repaired = True
+        market_repairs += 1
+    market = []
+    for order in raw_market:
+        normalized, changed = _exp173h_market(order)
+        repaired |= changed
+        market_repairs += int(changed)
+        if normalized is not None:
+            market.append(normalized)
+    max_orders = max(0, min(10, _int(_get(configuration, "maxMarketOrdersPerTurn", 10), 10)))
+    if len(market) > max_orders:
+        market = market[:max_orders]
+        repaired = True
+        market_repairs += 1
+
+    if set(action) - {"farmer", "hands", "market"}:
+        repaired = True
+
+    _EXP173H_REPORT["guard_repairs"] += int(repaired)
+    _EXP173H_REPORT["guard_unit_repairs"] += unit_repairs
+    _EXP173H_REPORT["guard_market_repairs"] += market_repairs
+    return {"farmer": farmer, "hands": hands, "market": market}
+
+
+def agent(observation, configuration=None):
+    """Kaggle entry point with a final fail-closed action-contract guard."""
+    _EXP173H_REPORT["guard_calls"] += 1
+    try:
+        action = _EXP173H_PARENT(observation, configuration)
+    except Exception:
+        _EXP173H_REPORT["guard_parent_errors"] += 1
+        action = {"farmer": ["PASS"], "hands": [], "market": []}
+    result = _exp173h_sanitize(observation, configuration, action)
+    parent_telemetry = getattr(_EXP173H_PARENT, "telemetry", {})
+    if isinstance(parent_telemetry, dict):
+        for key, value in parent_telemetry.items():
+            if not key.startswith("guard_"):
+                _EXP173H_REPORT[key] = value
+    return result
+
+
+agent.telemetry = _EXP173H_REPORT
+__all__ = ["agent"]
