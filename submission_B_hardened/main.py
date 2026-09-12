@@ -955,17 +955,33 @@ def _router(observation,step,state):
         state['day27']=True
     return state.get('route',0)
 
-_R42_OPENING=[['BUY_PRODUCT', 'WHEAT', 13], ['BUY_PRODUCT', 'WHEAT', 30], ['SELL', 'WHEAT', 30]]
+_R42_OPENING=[['BUY_PRODUCT', 'WHEAT', 8]]
 for _r42_tape in _ROUTES.values():
     _r42_tape[0]=dict(_r42_tape[0],market=[list(o) for o in _R42_OPENING])
+    _r42_market=[list(o) for o in _r42_tape[1].get('market',[])]
+    if _r42_market and _r42_market[0]==['SELL','WHEAT',13]:
+        _r42_market[0]=['SELL','WHEAT',8]
+        _r42_tape[1]=dict(_r42_tape[1],market=_r42_market)
 del _r42_tape
+del _r42_market
 _IMPL=make_agent(_ROUTES,router=_router,**_SETTINGS)
 _IMPL.chassis.diagnostics['terminal_rescue_errors']=0
 
 def agent(observation,configuration=None):
     try:
         action=_IMPL(observation,configuration)
-        pass
+        if _step_of(observation)==17:
+            reserve=30
+            money=max(0,_int(_get((_get(observation,'farms',[]) or [])[ _int(_get(observation,'player',0)) ],'money',0)))
+            guarded=[]
+            for order in action.get('market',[]):
+                if len(order)>=3 and order[:2]==['BUY_SEED','MELON']:
+                    quantity=min(max(0,_int(order[2])),max(0,(money-reserve)//SEED_PRICE['MELON']))
+                    if quantity:
+                        guarded.append(['BUY_SEED','MELON',quantity]);money-=quantity*SEED_PRICE['MELON']
+                else:
+                    guarded.append(order)
+            action=dict(action,market=guarded)
         return action
     except Exception:
         return {'farmer':['PASS'],'hands':[],'market':[]}
@@ -1626,6 +1642,7 @@ _R36_SALE_PARENT=agent
 _R36_NATIVE_LEAD=Chassis._sell_lead
 _R36_NATIVE_SUPPRESS=Chassis._apply_suppression
 _R36_SALE_REPORT={}
+_R36_ITEM_HORIZONS={'MILK':12,'STRAWBERRY':8,'WOOL':8}
 
 def _r36_native_lead(self,action,view,projected,route,step,next_sup):
     if step<288 or step>=696:
@@ -1649,8 +1666,6 @@ def _r36_reserve(obs,action):
     if not 288<=step<696:return action
     native=_IMPL.chassis.players[int(obs['player'])]
     tape=_IMPL.chassis.routes[native['route']]
-    end=min(695,step+_R37_HORIZONS.get(int(obs['player']),2),(step//72+1)*72-1)
-    if end<=step:return action
     commands=[action.get('farmer') or ['PASS'],*(action.get('hands') or [])]
     view=FarmView(obs)
     # This projection intentionally abstains on ambiguous animal depot returns.
@@ -1666,6 +1681,9 @@ def _r36_reserve(obs,action):
     debts=native['sell_state'].setdefault('r36_debts',{})
     for item in PRODUCTS:
         if item in ('WHEAT','FERTILIZER') or item in blocked or view.prices.get(item,0)<2:continue
+        horizon=_R36_ITEM_HORIZONS.get(item,_R37_HORIZONS.get(int(obs['player']),2))
+        end=min(695,step+horizon,(step//72+1)*72-1)
+        if end<=step:continue
         available=max(0,int(stock.get(item,0)))
         if not available or len(market)>=10:continue
         reservations=[]
@@ -2363,6 +2381,140 @@ agent=globals().pop('agent')
 # repairs the external Kaggle action contract if an overlay emits malformed
 # output or falls back with the wrong hand count.
 # ---------------------------------------------------------------------------
+# EXP-184: third-shop livestock correction derived from loss replays.
+_R54_LATE_PARENT=agent
+_R54_LATE_STATES={}
+_R54_LATE_REPORT={}
+_R54_LATE_SITES={(2,3),(3,2),(4,1)}
+_R54_MILK_SHOPS={'PIZZA_SHOP','ICE_CREAM_SHOP','SMOOTHIE_SHOP'}
+
+def _r54_new_state():
+    return {'last':-1,'target':None,'pending_buy':None,'reserved':0,
+            'carrying':{},'pending_places':[],'sites':{},'credit':0,
+            'requested':0,'confirmed':0,'picked':0,'placed':0,
+            'failed_buys':0,'failed_places':0,'extra_harvested':0,
+            'extra_sale_requests':0,'egg_sales_removed':0}
+
+def _r54_target(shops):
+    first=tuple(shops[:3])
+    if len(first)<3:return None
+    if first[2]=='YARN_STORE' and 'YARN_STORE' not in first[:2]:return 'SHEEP'
+    if 'YARN_STORE' not in first and sum(s in _R54_MILK_SHOPS for s in first)==3:return 'COW'
+    return False
+
+def _r54_late_livestock(obs,action,state):
+    step=int(obs['step']);player=int(obs['player']);farm=obs['farms'][player]
+    private=obs['private'];shed=private['shed'];inventories=private['inventories']
+    shops=obs['town']['unlocked_shops']
+    if state['target'] is None:
+        state['target']=_r54_target(shops)
+    target=state['target']
+    if not target:return action
+
+    pending=state.pop('pending_buy',None)
+    if pending is not None:
+        gained=max(0,int(shed.get(target,0))-pending['before'])
+        confirmed=min(pending['quantity'],gained)
+        state['reserved']+=confirmed;state['confirmed']+=confirmed
+        state['failed_buys']+=pending['quantity']-confirmed
+    for pending in state['pending_places']:
+        x,y=pending['site'];tile=farm['tiles'][y][x]
+        if (isinstance(tile,dict) and tile.get('animal')==target
+                and tile.get('placed_day')==pending['day']):
+            state['sites'][(x,y)]=pending['day'];state['placed']+=1
+            actor=pending['actor']
+            state['carrying'][actor]=max(0,state['carrying'].get(actor,0)-1)
+        else:state['failed_places']+=1
+    state['pending_places']=[]
+
+    result=copy.deepcopy(action)
+    positions=[farm['farmer'],*farm['hands']]
+    workers=[result.get('farmer') or ['PASS'],*(result.get('hands') or [])]
+    product='MILK' if target=='COW' else 'WOOL'
+    available=int(shed.get(target,0));occupied=set();seen_harvest=set()
+    for actor,work in enumerate(workers[:len(positions)]):
+        x,y=positions[actor];site=(x,y);tile=farm['tiles'][y][x]
+        inventory=inventories[actor] if actor<len(inventories) else {}
+        if (work==['HARVEST'] and site in state['sites'] and site not in seen_harvest
+                and isinstance(tile,dict) and tile.get('animal')==target
+                and tile.get('placed_day')==state['sites'][site]):
+            units=max(0,int(tile.get('yield_units',0)))
+            state['credit']+=units;state['extra_harvested']+=units
+            seen_harvest.add(site)
+        if work==['BUILD_COOP'] and site in _R54_LATE_SITES and step>=240:
+            work[0]='BUILD_PASTURE'
+        if len(work)>=2 and work[:2]==['PICKUP','GOOSE']:
+            quantity=max(0,int(work[2]) if len(work)>2 else 1)
+            if (quantity and state['reserved']>=quantity and available>=quantity
+                    and _shed_adjacent(site,10)
+                    and not any(inventory.get(a,0) for a in ('COW','SHEEP','GOOSE'))):
+                work[1]=target;state['reserved']-=quantity;available-=quantity
+                state['carrying'][actor]=state['carrying'].get(actor,0)+quantity
+                state['picked']+=quantity
+        if (len(work)>=2 and work[:2]==['PLACE','GOOSE']
+                and state['carrying'].get(actor,0)>0 and inventory.get(target,0)>0
+                and isinstance(tile,dict) and tile.get('kind')=='PASTURE'
+                and 'animal' not in tile and site not in occupied):
+            work[1]=target
+            state['pending_places'].append({'actor':actor,'site':site,'day':step//24})
+        if (len(work)>=2 and work[:2]==['PLACE','EGG'] and inventory.get(product,0)>0
+                and not inventory.get('EGG',0) and _shed_adjacent(site,10)):
+            work[1]=product
+            if len(work)>=3:work[2]=min(max(1,int(work[2])),int(inventory[product]))
+        if (len(work)>=2 and work[0]=='PLACE' and work[1] in ('COW','SHEEP','GOOSE')
+                and inventory.get(work[1],0)>0):occupied.add(site)
+    result['farmer'],result['hands']=workers[0],workers[1:]
+
+    market=result.get('market',[])
+    for order in market:
+        if (240<=step<=266 and len(order)>=3 and order[:2]==['BUY_ANIMAL','GOOSE']
+                and state.get('pending_buy') is None):
+            quantity=max(0,int(order[2]))
+            if quantity and quantity<=3-state['confirmed']-state['reserved']-sum(state['carrying'].values()):
+                order[1]=target;state['requested']+=quantity
+                state['pending_buy']={'before':int(shed.get(target,0)),'quantity':quantity}
+    if step>=241:
+        kept=[]
+        for order in market:
+            if len(order)>=2 and order[:2]==['SELL','EGG']:
+                state['egg_sales_removed']+=1
+            else:kept.append(order)
+        market=result['market']=kept
+
+    if state['credit']>0:
+        stock=projected_shed(result,FarmView(obs))
+        planned=sum(max(0,int(o[2])) for o in market if len(o)>=3 and o[:2]==['SELL',product])
+        extra=min(state['credit'],max(0,int(stock.get(product,0))-planned))
+        if extra:
+            sale=next((o for o in market if len(o)>=3 and o[:2]==['SELL',product] and int(o[2])>0),None)
+            if sale is not None:
+                sale[2]=int(sale[2])+extra;state['credit']-=extra
+                state['extra_sale_requests']+=extra
+    return result
+
+def agent(observation,configuration=None):
+    step=int(observation['step']);player=int(observation['player'])
+    state=_R54_LATE_STATES.get(player)
+    if state is None or step<=state['last']:
+        state=_R54_LATE_STATES[player]=_r54_new_state()
+    state['last']=step
+    result=_R54_LATE_PARENT(observation,configuration)
+    try:
+        if configuration is None or all(configuration.get(k,v)==v for k,v in
+            [('boardSize',10),('turnsPerDay',24),('shedCapacity',100),('maxMarketOrdersPerTurn',10)]):
+            result=_r54_late_livestock(observation,result,state)
+    except Exception:
+        state['errors']=state.get('errors',0)+1
+    _R54_LATE_REPORT.clear();_R54_LATE_REPORT.update(getattr(_R54_LATE_PARENT,'telemetry',{}))
+    for name in ('target','requested','confirmed','reserved','picked','placed','failed_buys',
+                 'failed_places','extra_harvested','extra_sale_requests','egg_sales_removed','credit','errors'):
+        _R54_LATE_REPORT['late_'+name]=state.get(name,0)
+    return result
+
+agent.telemetry=_R54_LATE_REPORT
+agent=globals().pop('agent')
+
+
 _EXP173H_PARENT = agent
 _EXP173H_REPORT = {
     "guard_calls": 0,
