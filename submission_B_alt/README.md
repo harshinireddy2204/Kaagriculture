@@ -1,24 +1,18 @@
-# Submission B (alternative / backup) — multi-file tape-router
+# Submission B — ALT (master-engine-v2)
 
-Backup for `../submission_B` (the single-file agent). This is the public
-**"kaggriculture-structured-economic-policy-v2"** agent: a tape-router that forks its plan on
-the town shop-draw (~step 144) and reserves/spreads sells inside 72-turn shop blocks.
+`main.py` is the public **"master-engine-v2"** agent: single-file, **stdlib-only**,
+self-contained, last callable `agent()` with a dict safe-fallback. Second-strongest of the set.
 
-## Files (all required — upload together as the tarball)
-- `main.py` — entry point; loads `policy.build_agent(settings)`, exposes `agent()`
-- `router.py` — plan selection / routing (44 KB)
-- `policy.py` — sale-window overlay
-- `actions.json` — the recorded plans/tape (~5 MB)
-- `settings.json`
+## Measured
+- vs `random`: ~170k median.
+- vs previous live **v35**: 12/12 wins, +1,973.
+- Loses to the PRIMARY `../submission_B` (moreyield) 16/16 (−1,272), so it's the backup / a
+  strategically-different second slot.
 
-## Measured (exact engine, this repo's harness)
-- vs `random`: ~173k coins median.
-- vs `main_rescue2800.py`: **10/10 wins, avg margin ~+16k** (both seats, 5 seeds).
-- Loses head-to-head to `../submission_B` (most-powerfull-route) 0/10, which is why that one is
-  the primary and this is the backup.
-
-## Upload
-Multi-file — upload the bundled `../submission_B_alt.tar.gz` (main.py at root + the 4 support
-files). A bare `main.py` will NOT work; it needs its siblings and `actions.json`.
+## Role
+Backup for the primary, or the eventual replacement for the v35 slot once moreyield is proven
+live. Single-file — upload `main.py` (or `../submission_B_alt.tar.gz`).
 
 Provenance: adopted public competitor agent, not original work.
+(Previous multi-file structured-economic-policy alt was retired — this single-file agent is
+stronger and simpler to submit.)

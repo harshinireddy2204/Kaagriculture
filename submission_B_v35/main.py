@@ -1290,9 +1290,7 @@ def _v219_request(obs, action, state, native):
     # One watering tour: at most 2 entry moves + 9 between tiles + 10 waters.
     # A hire request by hour2 leaves at least21 callbacks after confirmation.
     crop_workers=1 if day in (19,20,21,22,23,25) and offset<=2 else (3 if 26<=day<=28 else 2)
-    labor=_r53_labor_assignment(obs,action,fertilizer)
-    if labor is not None:crop_workers=labor['workers']
-    count=crop_workers+int(fertilizer and day==27 and labor is None)
+    count=crop_workers+int(fertilizer and day==27)
     extra=[]
     if not state.get('committed'):
         extra += [['BUY_LAND'],['BUY_SEED','TOMATO',10]]
@@ -1311,9 +1309,7 @@ def _v219_request(obs, action, state, native):
         elif order[0]=='BUY_SEED':budget+=int(order[2])*{'WHEAT':10,'CARROT':20,'TOMATO':50,'STRAWBERRY':100,'MELON':80}[order[1]]
     if farm['money']<budget+3000:
         _V219_REPORT['budget_declines']+=1;return action
-    state['pending']={'step':step,'first_actor':expected+1,'count':count,'crop_workers':crop_workers,'fertilizer':fertilizer,'labor':labor}
-    if labor is not None:
-        _R53_LABOR_REPORT['labor_requests']+=1;_R53_LABOR_REPORT['labor_hires_avoided']+=1;_R53_LABOR_REPORT['labor_day'+str(day)]+=1
+    state['pending']={'step':step,'first_actor':expected+1,'count':count,'crop_workers':crop_workers,'fertilizer':fertilizer}
     state['requested_day']=day
     _V219_REPORT['hire_requests']+=count
     if not state.get('committed'):
@@ -1334,7 +1330,7 @@ def _v219_worker(obs, state, actor, role):
         home=_v219_home(pos)
         walk=_v219_walk(pos,home)
         if walk:return walk
-        desired=role.get('fertilizer_quantity',10 if role['kind']=='fertilizer' else 5)
+        desired=10 if role['kind']=='fertilizer' else 5
         if inv.get('FERTILIZER',0)>=desired:role['loaded']=True
         elif role.get('pickup_requested'):
             # Never spend repeated turns waiting for stock that was not bought.
@@ -1403,12 +1399,6 @@ def agent(observation, configuration=None):
                 else:targets=[[(5,5),(6,5),(7,5)],[(8,5),(9,5),(9,6),(8,6)],[(5,6),(6,6),(7,6)]][index]
                 state['workers'][pending['first_actor']+index]={'kind':'fertilizer' if fertilizer_worker else 'crop','targets':targets,
                     'needs_fertilizer':pending['fertilizer'] and (day==24 or fertilizer_worker)}
-                if pending.get('labor') is not None:
-                    role=state['workers'][pending['first_actor']+index]
-                    role['targets']=[tuple(p) for p in pending['labor']['paths'][index]]
-                    role['needs_fertilizer']=pending['labor']['fertilizer'];role['fertilizer_quantity']=len(role['targets'])
-                    if tuple(farm['hands'][pending['first_actor']+index-1])!=tuple(pending['labor']['spawns'][index]):_R53_LABOR_REPORT['labor_spawn_errors']+=1
-                    if index==0:_R53_LABOR_REPORT['labor_confirmed']+=1
             _V219_REPORT['confirmed_workers']+=pending['count']
         else:_V219_REPORT['hire_shortfalls']+=pending['count']
     action=_v219_request(observation,action,state,native)
@@ -1874,8 +1864,6 @@ def agent(observation, configuration=None):
     if _R37_HORIZONS[player]==3 and probe_state['matched']:
         _R37_HORIZONS[player]=4
         _R44_REPORT['probe_four_turn_calls']+=1
-    # EXP179: four-turn reservation; retain stock, debt and purchase barriers.
-    if 288 <= step < 696:_R37_HORIZONS[player] = 4
     action = _R37_PARENT(observation, configuration)
     _r44_after(observation,action,probe_state)
     if _R37_QUOTE and step >= 288:
@@ -2097,260 +2085,5 @@ def agent(observation,configuration=None):
     _R46_REPORT.update(_V233_REPORT)
     return result
 agent.telemetry=_R46_REPORT
-agent=globals().pop('agent')
-
-# EXP182: finite-harvest wheat/carrot input planner; original adaptation.
-_R51_INPUT_PARENT=agent
-_R51_INPUT_STATES={}
-_R51_INPUT_REPORT={}
-_R51_INPUT_MAX_WORKERS=2
-_R51_INPUT_CROPS={'WHEAT':(2,4,6),'CARROT':(2,3,4)}
-
-def _r51_input_forecast(obs,route,expected):
-    step=int(obs['step']);day=step//24;farm=obs['farms'][obs['player']]
-    pos=[list(farm['farmer'])]+[list(p) for p in farm['hands'][:expected]];targets={}
-    for y,line in enumerate(farm['tiles']):
-        for x,tile in enumerate(line):
-            if not isinstance(tile,dict) or tile.get('crop') not in _R51_INPUT_CROPS:continue
-            item=tile['crop'];first,last,cap=_R51_INPUT_CROPS[item]
-            if 1<=day-tile['planted_day']<last:
-                targets[(x,y)]={'crop':item,'birth':tile['planted_day'],'yield':tile['yield_units'],
-                    'until':tile.get('fertilized_until_day',-1),'watered':tile.get('watered_today',False),'water':[],'harvest':None,'first':first,'last':last,'cap':cap}
-    access=((4,4),(5,4),(4,5),(5,5));seen=set()
-    # Native continuation ends before the reactive terminal closure planner.
-    for t in range(step,min(712,(day+4)*24)):
-        tape=_IMPL.chassis.routes[2 if t>=648 else route];a=tape[t]
-        for actor,c in enumerate([a.get('farmer') or ['PASS'],*(a.get('hands') or [])][:len(pos)]):
-            if not c:continue
-            xy=tuple(pos[actor]);target=targets.get(xy)
-            if target is not None and target['harvest'] is None:
-                if c[0]=='WATER' and (t//24,xy) not in seen:
-                    seen.add((t//24,xy))
-                    if not(t//24==day and target['watered']) and target['first']<=t//24-target['birth']<=target['last']:target['water'].append(t)
-                if c[0]=='HARVEST':target['harvest']=t
-            if c[0] in MOVES:
-                dx,dy=MOVES[c[0]];pos[actor]=[max(0,min(9,pos[actor][0]+dx)),max(0,min(9,pos[actor][1]+dy))]
-        for o in a.get('market',[]):
-            if o and o[0]=='HIRE':
-                counts={p:sum(tuple(q)==p for q in pos) for p in access}
-                pos.append(list(min(access,key=lambda p:(counts[p],access.index(p)))))
-        if (t+1)%24==0:pos=[[4,4]]
-    return targets
-
-def _r51_input_gain(target,arrival,day):
-    if target['harvest'] is None or target['harvest']<=arrival:return 0
-    extra=sum(arrival<t<=target['harvest'] and day<=t//24<=day+2 and t//24>target['until'] for t in target['water'])
-    baseline=target['yield']+sum(2 if t//24<=target['until'] else 1 for t in target['water'])
-    return max(0,min(extra,target['cap']-baseline))
-
-def _r51_input_path(obs,targets):
-    step=int(obs['step']);day=step//24;now=step+4;pos=(4,4);remaining=dict(targets);path=[];quantities={'WHEAT':0,'CARROT':0}
-    while remaining and len(path)<8:
-        options=[]
-        for xy,target in remaining.items():
-            arrival=now+abs(pos[0]-xy[0])+abs(pos[1]-xy[1]);gain=_r51_input_gain(target,arrival,day)
-            price=max(1,int(obs['market']['prices'][target['crop']])-2)
-            if gain and arrival<day*24+23:options.append((gain*price/(arrival-now+1),gain*price,-arrival,xy,arrival,gain))
-        if not options:break
-        _,_,_,xy,arrival,gain=max(options);target=remaining.pop(xy)
-        path.append((xy[0],xy[1],target['crop'],target['birth']));quantities[target['crop']]+=gain;now=arrival+1;pos=xy
-    return path,quantities
-
-def _r51_input_control(obs,action,state):
-    step=int(obs['step']);day=step//24;hour=step%24;player=int(obs['player']);farm=obs['farms'][player];private=obs['private']
-    native=_IMPL.chassis.players[player]
-    if state.get('day')!=day:state.update(day=day,workers={},pending=None,placed=[])
-    for x,y in state['placed']:
-        tile=farm['tiles'][y][x]
-        if isinstance(tile,dict) and tile.get('fertilized_until_day',-1)>=day+2:_R51_INPUT_REPORT['input_confirmed_applications']+=1
-        else:_R51_INPUT_REPORT['input_application_errors']+=1
-    state['placed']=[]
-    if state.get('pending'):
-        pending=state.pop('pending')
-        for actor,plan in pending.items():
-            if len(farm['hands'])>=actor:state['workers'][actor]=plan;_R51_INPUT_REPORT['input_confirmed_hires']+=1
-            else:_R51_INPUT_REPORT['input_hire_errors']+=1
-    if state['workers']:
-        changed=copy.deepcopy(action)
-        for actor,plan in state['workers'].items():
-            inv=private['inventories'][actor];pos=tuple(farm['hands'][actor-1]);cmd=['PASS']
-            if not plan['loaded']:
-                stock=projected_shed(changed,FarmView(obs));q=min(plan['quantity'],max(0,stock.get('FERTILIZER',0)))
-                if q and _shed_adjacent(pos,10):
-                    cmd=['PICKUP','FERTILIZER',q];plan['loaded']=True;_R51_INPUT_REPORT['input_loaded_units']+=q
-                    if q<plan['quantity']:_R51_INPUT_REPORT['input_stock_shortfalls']+=plan['quantity']-q
-            elif inv.get('FERTILIZER',0):
-                while plan['path']:
-                    x,y,crop,birth=plan['path'][0];tile=farm['tiles'][y][x]
-                    if not isinstance(tile,dict) or tile.get('crop')!=crop or tile.get('planted_day')!=birth or tile.get('fertilized_until_day',-1)>=day+2:
-                        plan['path'].pop(0);continue
-                    cmd=_v219_walk(pos,(x,y)) or ['FERTILIZE']
-                    if cmd==['FERTILIZE']:state['placed'].append((x,y));plan['path'].pop(0);_R51_INPUT_REPORT['input_application_requests']+=1
-                    break
-            changed['hands'][actor-1]=cmd
-        return changed
-    if hour not in (1,2,3) or not 12<=day<=28:return action
-    planned=_v219_native_day(native,day);expected=max(len(a.get('hands',[])) for a in planned)
-    if any(o and o[0]=='HIRE' for a in planned[hour:] for o in a.get('market',[])) or native['pending']:return action
-    parents=[_V219_STATES.get(player,{}),_V233_STATES.get(player,{})]
-    # A parent may retry after a full market queue; its headcount must remain native.
-    if day in (12,18) or any(p.get('committed') and p.get('requested_day')!=day for p in parents):return action
-    if any(p.get('pending') for p in parents) or any(o and o[0]=='HIRE' for o in action.get('market',[])):return action
-    owned=set(range(1,expected+1))
-    for p in parents:
-        actors=set(p.get('workers',{}))
-        if owned&actors:return action
-        owned|=actors
-    if owned!=set(range(1,len(farm['hands'])+1)):return action
-    targets=_r51_input_forecast(obs,native['route'],expected);plans=[];total_q=0;total_cost=0;all_units={'WHEAT':0,'CARROT':0}
-    stock=projected_shed(action,FarmView(obs));purchases=sum(max(0,int(o[2])) for o in action.get('market',[]) if len(o)>2 and o[0] in ('BUY_PRODUCT','BUY_ANIMAL'))
-    # Units act before market orders. Preserve the native next-turn pickup,
-    # after the current parent's actual sales/purchases, before buying tour inputs.
-    available=max(0,stock.get('FERTILIZER',0))
-    for o in action.get('market',[]):
-        if len(o)>=3 and o[:2]==['SELL','FERTILIZER']:available=max(0,available-max(0,int(o[2])))
-        elif len(o)>=3 and o[:2]==['BUY_PRODUCT','FERTILIZER']:available+=max(0,int(o[2]))
-    next_native=planned[hour+1];native_pickups=sum(max(0,int(c[2]) if len(c)>2 else 1) for c in [next_native.get('farmer') or ['PASS'],*(next_native.get('hands') or [])] if len(c)>1 and c[:2]==['PICKUP','FERTILIZER'])
-    topup=max(0,native_pickups-available)
-    for i in range(_R51_INPUT_MAX_WORKERS):
-        path,units=_r51_input_path(obs,targets);q=len(path)
-        if q<3 or len(action.get('market',[]))+2+i>10 or sum(stock.values())+purchases+total_q+q+topup>95:break
-        quote=_r37_market_price('FERTILIZER',obs['market']['inventory']['FERTILIZER']-total_q-q-topup)
-        cost=(q+(topup if i==0 else 0))*(quote+2)+_v219_fib(int(farm['hires_today'])+i)
-        value=sum(n*max(1,_r37_market_price(item,obs['market']['inventory'][item]+all_units[item]+n)-2) for item,n in units.items())
-        if value<1.5*cost+50 or farm['money']<total_cost+cost+3000:break
-        plans.append({'path':path,'quantity':q,'loaded':False});total_q+=q;total_cost+=cost
-        for item,n in units.items():all_units[item]+=n
-        for x,y,_,_ in path:targets.pop((x,y),None)
-    if not plans:return action
-    state['pending']={len(farm['hands'])+1+i:plan for i,plan in enumerate(plans)}
-    _R51_INPUT_REPORT['input_hire_requests']+=len(plans);_R51_INPUT_REPORT['input_purchase_requests']+=total_q+topup
-    _R51_INPUT_REPORT['input_forecast_wheat']+=all_units['WHEAT'];_R51_INPUT_REPORT['input_forecast_carrot']+=all_units['CARROT']
-    changed=copy.deepcopy(action);changed['market'] += [['BUY_PRODUCT','FERTILIZER',total_q+topup]]+[['HIRE'] for _ in plans];return changed
-
-def agent(observation,configuration=None):
-    try:
-        step=int(observation['step']);player=int(observation['player']);state=_R51_INPUT_STATES.get(player)
-        if state is None or step<=state['step']:
-            state=_R51_INPUT_STATES[player]={'step':-1}
-            _R51_INPUT_REPORT.update(input_hire_requests=0,input_confirmed_hires=0,input_hire_errors=0,input_purchase_requests=0,
-                input_loaded_units=0,input_stock_shortfalls=0,input_application_requests=0,input_confirmed_applications=0,
-                input_application_errors=0,input_errors=0,input_forecast_wheat=0,input_forecast_carrot=0)
-        state['step']=step;action=_R51_INPUT_PARENT(observation,configuration)
-        if configuration is None or all(configuration.get(k,v)==v for k,v in [('boardSize',10),('turnsPerDay',24),('shedCapacity',100),('maxMarketOrdersPerTurn',10)]):
-            action=_r51_input_control(observation,action,state)
-        _R51_INPUT_REPORT.update(getattr(_R51_INPUT_PARENT,'telemetry',{}));return action
-    except Exception:
-        _R51_INPUT_REPORT['input_errors']=_R51_INPUT_REPORT.get('input_errors',0)+1
-        return {'farmer':['PASS'],'hands':[],'market':[]}
-agent.telemetry=_R51_INPUT_REPORT
-agent=globals().pop('agent')
-
-# EXP182: project the final hour's actual worker actions before automatic deposit.
-_R51_WAREHOUSE_PARENT=agent
-_R51_WAREHOUSE_REPORT={}
-
-def _r51_close_warehouse(obs,action):
-    step=int(obs['step']);day=step//24
-    if step%24!=23 or not 12<=day<=28:return action
-    # No speculative product purchase/worker count model: these hours abstain.
-    if any(o and o[0] not in ('SELL',) for o in action.get('market',[])):return action
-    farm,private=_PLANNER_NS['_clone_state'](obs['farms'][obs['player']],obs['private'])
-    commands=[action.get('farmer') or ['PASS'],*(action.get('hands') or [])]
-    demand={}
-    for c in commands:
-        if len(c)>1 and c[0]=='PLANT':demand[c[1]]=demand.get(c[1],0)+1
-    blocked={k for k,q in demand.items() if q>private['seeds'].get(k,0)}
-    for actor,c in enumerate(commands[:len(private['inventories'])]):
-        if len(c)>1 and c[0]=='PLANT' and c[1] in blocked:c=['PASS']
-        _PLANNER_NS['_apply_unit_action'](farm,private,actor,c,10,day,24,100)
-    post=dict(private['shed'])
-    for o in action.get('market',[]):
-        if len(o)>=3 and o[0]=='SELL':post[o[1]]=max(0,post.get(o[1],0)-max(0,int(o[2])))
-    needed=sum(post.values())+sum(max(0,q) for inv in private['inventories'] for q in inv.values())-100
-    if needed<=0:return action
-    result=copy.deepcopy(action);orders=result['market']
-    # Grain and fertilizer have native input obligations; other products do not.
-    # Additional commodity sales are bounded by actual post-action physical stock.
-    for item in sorted((p for p in PRODUCTS if p not in ('WHEAT','FERTILIZER')),key=lambda p:-obs['market']['prices'].get(p,0)):
-        qty=min(needed,post.get(item,0))
-        if not qty:continue
-        existing=next((o for o in orders if len(o)>=3 and o[:2]==['SELL',item]),None)
-        if existing is not None:existing[2]=max(0,int(existing[2]))+qty
-        elif len(orders)<10:orders.append(['SELL',item,qty])
-        else:continue
-        needed-=qty;post[item]-=qty;_R51_WAREHOUSE_REPORT['warehouse_extra_sales']+=qty
-        if needed<=0:break
-    if needed>0:
-        native=_IMPL.chassis.players[int(obs['player'])];reserve=0
-        for t in range(step+1,719):
-            future=_IMPL.chassis.routes[2 if t>=648 else native['route']][t]
-            for c in [future.get('farmer') or ['PASS'],*(future.get('hands') or [])]:
-                if len(c)>1 and c[:2]==['PICKUP','WHEAT']:reserve+=max(0,int(c[2]) if len(c)>2 else 1)
-            if any(len(o)>1 and o[:2]==['BUY_PRODUCT','WHEAT'] for o in future.get('market',[])):break
-        incoming=sum(max(0,inv.get('WHEAT',0)) for inv in private['inventories'])
-        others=sum(q for p,q in post.items() if p!='WHEAT')+sum(max(0,q) for inv in private['inventories'] for p,q in inv.items() if p!='WHEAT')
-        # Even if every other carried item deposits first, this grain reserve fits.
-        qty=min(needed,post.get('WHEAT',0),max(0,post.get('WHEAT',0)+incoming-reserve)) if 100-others>=reserve else 0
-        existing=next((o for o in orders if len(o)>=3 and o[:2]==['SELL','WHEAT']),None)
-        if qty and (existing is not None or len(orders)<10):
-            if existing is not None:existing[2]=max(0,int(existing[2]))+qty
-            else:orders.append(['SELL','WHEAT',qty])
-            needed-=qty;_R51_WAREHOUSE_REPORT['warehouse_extra_sales']+=qty
-    _R51_WAREHOUSE_REPORT['warehouse_projected_unresolved']+=max(0,needed)
-    if result!=action:_R51_WAREHOUSE_REPORT['warehouse_changed_turns']+=1
-    return result
-
-def agent(observation,configuration=None):
-    result=_R51_WAREHOUSE_PARENT(observation,configuration)
-    try:
-        if int(observation['step'])==0:_R51_WAREHOUSE_REPORT.update(warehouse_changed_turns=0,warehouse_extra_sales=0,warehouse_projected_unresolved=0,warehouse_errors=0)
-        if configuration is None or all(configuration.get(k,v)==v for k,v in [('boardSize',10),('turnsPerDay',24),('shedCapacity',100),('maxMarketOrdersPerTurn',10)]):result=_r51_close_warehouse(observation,result)
-    except Exception:_R51_WAREHOUSE_REPORT['warehouse_errors']=_R51_WAREHOUSE_REPORT.get('warehouse_errors',0)+1
-    _R51_WAREHOUSE_REPORT.update(getattr(_R51_WAREHOUSE_PARENT,'telemetry',{}));return result
-agent.telemetry=_R51_WAREHOUSE_REPORT
-agent=globals().pop('agent')
-
-from itertools import permutations as _r53_permutations
-_R53_LABOR_REPORT=dict(labor_requests=0,labor_hires_avoided=0,labor_spawn_errors=0,labor_confirmed=0,labor_day26=0,labor_day27=0,labor_day28=0)
-
-def _r53_labor_assignment(obs,action,fertilizer):
-    step=int(obs['step']);day=step//24;farm=obs['farms'][obs['player']]
-    if day not in (26,27,28) or step%24>2:return None
-    # Do not preempt a later price-gated fertilizer request with a smaller unfertilized team.
-    if day==27 and not fertilizer:return None
-    count=3 if fertilizer else 2
-    positions=[list(farm['farmer'])]+[list(p) for p in farm['hands']]
-    for i,c in enumerate([action.get('farmer') or ['PASS'],*(action.get('hands') or [])][:len(positions)]):
-        if c and c[0] in MOVES:
-            dx,dy=MOVES[c[0]];positions[i]=[max(0,min(9,positions[i][0]+dx)),max(0,min(9,positions[i][1]+dy))]
-    access=((4,4),(5,4),(4,5),(5,5));spawns=[]
-    native_hires=sum(bool(o) and o[0]=='HIRE' for o in action.get('market',[]))
-    for i in range(native_hires+count):
-        chosen=min(access,key=lambda p:(sum(tuple(q)==p for q in positions),access.index(p)));positions.append(list(chosen))
-        if i>=native_hires:spawns.append(chosen)
-    groups=(((5,5),(6,5),(7,5),(8,5)),((9,5),(9,6),(8,6)),((5,6),(6,6),(7,6))) if fertilizer else (tuple((x,5) for x in range(5,10)),tuple((x,6) for x in range(5,10)))
-    choices=[];remaining=23-step%24
-    for assignment in _r53_permutations(groups):
-        costs=[]
-        for start,path in zip(spawns,assignment):
-            distance=abs(start[0]-path[0][0])+abs(start[1]-path[0][1])
-            distance+=sum(abs(a[0]-b[0])+abs(a[1]-b[1]) for a,b in zip(path,path[1:]))
-            distance+=min(abs(path[-1][0]-x)+abs(path[-1][1]-y) for x,y in access)
-            costs.append(distance+(3 if fertilizer else 2)*len(path)+1+int(fertilizer))
-        if max(costs)<=remaining:choices.append((max(costs),sum(costs),assignment))
-    if not choices:return None
-    _,_,assignment=min(choices)
-    return dict(paths=assignment,spawns=spawns,remaining=remaining,workers=count,fertilizer=fertilizer)
-
-_R53_LABOR_PARENT=agent
-def agent(observation,configuration=None):
-    if isinstance(observation,dict) and observation.get('step')==0:
-        for k in _R53_LABOR_REPORT:_R53_LABOR_REPORT[k]=0
-    result=_R53_LABOR_PARENT(observation,configuration)
-    _R53_LABOR_COMBINED.update(getattr(_R53_LABOR_PARENT,'telemetry',{}));_R53_LABOR_COMBINED.update(_R53_LABOR_REPORT)
-    return result
-_R53_LABOR_COMBINED={}
-agent.telemetry=_R53_LABOR_COMBINED
 agent=globals().pop('agent')
 

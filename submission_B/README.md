@@ -1,24 +1,25 @@
-# Submission B — single-file tape-router
+# Submission B — PRIMARY (more-yield-smarter-labor)
 
-`main.py` is a self-contained (stdlib-only, no external files) Kaggriculture agent, adopted
-from the public notebook **"most-powerfull-route" / "kaggriculture-v35-reactive-sales-sheep-
-expansion"** (the two are byte-identical). It embeds its plan data compressed in-file
-(base64+zlib) and exposes `agent(observation, configuration=None)` as the last callable, with a
-safe fallback that returns a valid dict on a malformed/empty observation.
+`main.py` is the strongest agent we've found: the public **"more-yield-smarter-labor"**
+notebook agent. Single-file, **stdlib-only**, self-contained; last callable is
+`agent(observation, configuration=None)` with a dict safe-fallback on a malformed observation.
 
 ## Measured (exact engine, this repo's harness)
-- vs `random`: ~150–161k coins median.
-- vs `main_rescue2800.py` (our current 2418 ladder agent): **16/16 wins, avg margin +89,542**
-  (both seats, 8 seeds).
-- Beats the alternative multi-file tape-router (structured-economic-policy) 10/10 head-to-head.
+- vs `random`: ~172k median.
+- vs our previous live agent **v35** (rating 2562): **12/12 wins, +2,525** avg margin.
+- vs `master-engine-v2`: 16/16, +1,272.  vs `rescue2800`: 16/16, +89,725.
+- Why it should climb: our live losses were photo-finishes (median ~-2.9k on ~100k totals);
+  an agent +2.5k stronger than v35 should flip a large share of them.
 
-## Role
-Intended as **active submission B**, paired with **A = main_rescue2800.py**. Kaggle scores the
-better of two active submissions, so B is the stronger primary and A is the safe fallback.
+## Rollout (safe)
+Two active slots. Recommended:
+- Keep the proven **v35 (2562)** — saved at `../submission_B_v35/main.py` — in one slot.
+- Put **this (moreyield)** in the other slot (replacing the weak rescue2800/2051). It gets a
+  live trial without giving up 2562; if it rates higher it becomes our score, else v35 holds.
+- Once moreyield proves out live, swap `../submission_B_alt` (master-engine-v2) in for v35.
 
 ## Upload
-Single file: upload `main.py` directly, or the bundled `../submission_B.tar.gz` (contains
-`main.py` at root). Validate in an interactive session before making it active.
+Single file — upload `main.py` (or `../submission_B.tar.gz`). Rename the download to `main.py`.
+Validate on Kaggle's engine + first-callback time before making active.
 
-Provenance: public competitor notebook; not original work. Adopted per the two-submission
-hedge strategy (same approach used for rescue2800 / shoprouter0909).
+Provenance: adopted public competitor agent, not original work.
