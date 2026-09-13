@@ -1958,6 +1958,7 @@ def _v233_eligible(obs,native):
 
 def _v233_request(obs,action,state,native):
     step=int(obs['step']);day=step//24;hour=step%24
+    if day>=29:return action
     if hour>(2 if state.get('committed') else 1) or state.get('requested_day')==day:return action
     if not state.get('committed') and (day!=12 or not _v233_eligible(obs,native)):return action
     planned=_v219_native_day(native,day)
@@ -2005,7 +2006,7 @@ def _v233_worker(obs,actor,targets):
     if missing and not inv.get('SHEEP',0) and private['shed'].get('SHEEP',0):
         return _v219_walk(pos,home) or ['PICKUP','SHEEP',min(missing,private['shed']['SHEEP'])]
     hungry=sum(not(isinstance(farm['tiles'][y][x],dict) and farm['tiles'][y][x].get('fed_today')) for x,y in targets)
-    if hungry and not inv.get('WHEAT',0) and private['shed'].get('WHEAT',0):
+    if step//24<29 and hungry and not inv.get('WHEAT',0) and private['shed'].get('WHEAT',0):
         return _v219_walk(pos,home) or ['PICKUP','WHEAT',min(hungry,private['shed']['WHEAT'])]
     tasks=[]
     for target in targets:
@@ -2015,7 +2016,10 @@ def _v233_worker(obs,actor,targets):
         elif isinstance(tile,dict) and tile.get('kind')=='PASTURE' and not tile.get('animal'):
             if inv.get('SHEEP',0):command=['PLACE','SHEEP']
         elif isinstance(tile,dict) and tile.get('animal')=='SHEEP':
-            if not tile['fed_today'] and inv.get('WHEAT',0):command=['FEED']
+            if step//24>=29:
+                if tile['yield_units']:command=['HARVEST']
+                elif tile['fertilizer_available']:command=['COLLECT_FERTILIZER']
+            elif not tile['fed_today'] and inv.get('WHEAT',0):command=['FEED']
             elif not tile['cared_today']:command=['CARE']
             elif tile['yield_units']:command=['HARVEST']
             elif tile['fertilizer_available']:command=['COLLECT_FERTILIZER']
@@ -2026,7 +2030,7 @@ def _v233_worker(obs,actor,targets):
     return ['PASS']
 
 def _v234_rescue(obs,action,state):
-    if not state['workers'] or int(obs['step'])%24>14:return action
+    if not state['workers'] or int(obs['step'])%24>14 or int(obs['step'])//24>=29:return action
     orders=action.get('market',[])
     if len(orders)>=MAX_ORDERS:return action
     if any(o and (o[0] in ('HIRE','BUY_LAND','BUY_ANIMAL','BUY_PRODUCT','BUY_SEED') or (len(o)>1 and o[1]=='WHEAT')) for o in orders):return action

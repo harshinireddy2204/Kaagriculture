@@ -3,6 +3,13 @@
 `main.py` = the guarded **moreyield champion** + three replay-informed changes, validated to
 beat everything else we have in faithful head-to-head:
 
+0. **V233 day-29 terminal fix (Sep 13, live at ~2790)** — in the double-Yarn six-sheep branch, day 29
+   skips FEED/CARE (provably wasted — the game ends at step 718, so day-29 feeding/caring can never
+   produce a future payout) and goes straight to HARVEST → COLLECT_FERTILIZER; V233 also stops buying
+   feed-wheat / rescuing on the last day. Patched *inside* the worker planner (not an outer wrapper,
+   which would deadlock the reactive loop). Validated over 100 seeds × both seats (200 games),
+   seat-averaged: **never causally negative**, +~600 in the ~7% of games where the branch fires
+   (mean +30–52/game). Small but pure upside; credit to the reviewer critique that scoped it.
 1. **R42 cash-safe opening** — day-0 wheat wash shrunk 13+30 → 8, plus a turn-17 melon guard that
    protects the feed-critical wheat seeds.
 2. **R36 per-item sale preemption** — reserve/sell MILK 12 turns early, STRAWBERRY/WOOL 8 turns
